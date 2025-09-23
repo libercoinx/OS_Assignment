@@ -1,10 +1,10 @@
 ARCH  := riscv64
 CC    := riscv64-unknown-elf-gcc
 OBJCOPY := riscv64-unknown-elf-objcopy
-CFLAGS:= -march=rv64gc -mabi=lp64 -mcmodel=medany -nostdlib -nostartfiles -ffreestanding -O2 -Wall -Wextra
+CFLAGS:= -march=rv64gc -mabi=lp64 -mcmodel=medany -nostdlib -nostartfiles -ffreestanding -O2 -Wall -Wextra -I ./include
 LDFLAGS := -T kernel.ld -nostdlib -static
 
-OBJS := kernel/entry.o kernel/start.o kernel/main.o kernel/uart.o
+OBJS := kernel/entry.o kernel/start.o kernel/main.o kernel/uart.o kernel/console.o kernel/printf.o kernel/test.o
 
 all: kernel.elf kernel.bin
 

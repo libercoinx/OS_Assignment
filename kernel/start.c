@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "uart.h"
+#include "defs.h"
 
 extern void main(void);
 
@@ -14,7 +14,7 @@ static inline void    w_satp(uint64_t x){ asm volatile("csrw satp, %0" :: "r"(x)
 static inline void    w_stvec(uint64_t x){ asm volatile("csrw stvec, %0" :: "r"(x)); }
 
 void start(void){
-  uart_init();
+  console_init();
   main();
 }
 

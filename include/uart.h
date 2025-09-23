@@ -21,11 +21,14 @@
 
 /* LSR 位定义 */
 #define LSR_THRE       (1 << 5)  /* Transmitter Holding Register Empty */
+#define LSR_DR         (1 << 0)  /* Data Ready */
 
 /* 基本输出接口 */
 void uart_init(void);
 void uart_putc(char c);
 void uart_puts(const char *s);
+int  uart_getc(void);           /* 阻塞读取一个字符 */
+int  uart_getc_nonblock(void);  /* 无数据返回 -1 */
 
 
 

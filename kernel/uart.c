@@ -45,6 +45,18 @@ void uart_puts(const char *s) {
   }
 }
 
+int uart_getc_nonblock(void) {
+  if ((mmio_read8(UART0_BASE + UART_LSR) & LSR_DR) == 0)
+    return -1;
+  return (int)mmio_read8(UART0_BASE + UART_RBR_THR);
+}
+
+int uart_getc(void) {
+  int ch;
+  while ((ch = uart_getc_nonblock()) < 0) { }
+  return ch & 0xFF;
+}
+
 
 
 
