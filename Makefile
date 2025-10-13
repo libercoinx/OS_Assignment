@@ -1,10 +1,10 @@
 ARCH  := riscv64
 CC    := riscv64-unknown-elf-gcc
 OBJCOPY := riscv64-unknown-elf-objcopy
-CFLAGS:= -march=rv64gc -mabi=lp64 -mcmodel=medany -nostdlib -nostartfiles -ffreestanding -O2 -Wall -Wextra -I ./include
+CFLAGS:= -march=rv64gc -mabi=lp64 -mcmodel=medany -nostdlib -nostartfiles -ffreestanding -O2 -Wall -Wextra -I ./include -I ./kernel
 LDFLAGS := -T kernel.ld -nostdlib -static
 
-OBJS := kernel/entry.o kernel/start.o kernel/main.o kernel/uart.o kernel/console.o kernel/printf.o kernel/test.o
+OBJS := kernel/entry.o kernel/start.o kernel/trampoline.o kernel/main.o kernel/uart.o kernel/console.o kernel/printf.o kernel/string.o kernel/panic.o kernel/kalloc.o kernel/vm.o kernel/test.o
 
 all: kernel.elf kernel.bin
 
@@ -17,6 +17,9 @@ kernel.bin: kernel.elf
 kernel/entry.o: kernel/entry.S
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+kernel/trampoline.o: kernel/trampoline.S
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 kernel/%.o: kernel/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -27,5 +30,3 @@ clean:
 	rm -f kernel/*.o kernel.elf kernel.bin
 
 .PHONY: all run clean
-
-

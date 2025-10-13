@@ -1,0 +1,36 @@
+#include "string.h"
+
+void *memset(void *dst, int c, unsigned n) {
+  unsigned char *d = (unsigned char *)dst;
+  while(n--) {
+    *d++ = (unsigned char)c;
+  }
+  return dst;
+}
+
+void *memmove(void *dst, const void *src, unsigned n) {
+  unsigned char *d = (unsigned char *)dst;
+  const unsigned char *s = (const unsigned char *)src;
+
+  if(d == s || n == 0) {
+    return dst;
+  }
+
+  if(d < s) {
+    while(n--) {
+      *d++ = *s++;
+    }
+  } else {
+    d += n;
+    s += n;
+    while(n--) {
+      *--d = *--s;
+    }
+  }
+  return dst;
+}
+
+void *memcpy(void *dst, const void *src, unsigned n) {
+  return memmove(dst, src, n);
+}
+
