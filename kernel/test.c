@@ -4,6 +4,7 @@
 #include "riscv.h"
 #include "string.h"
 #include "vm.h"
+#include "trap.h"
 
 #define TEST_ASSERT(cond, msg)                                      \
   do {                                                              \
@@ -99,3 +100,54 @@ void test_virtual_memory(void) {
   printf("[PASS] kernel pagetable mappings\n");
 }
 
+void test_timer_interrupt(void) {
+  printf("[TEST] timer interrupt\n");
+  uint64 start_ticks = get_ticks();
+  uint64 target = start_ticks + 5;
+  uint64 start_time = get_time();
+
+  while(get_ticks() < target) {
+    __asm__ volatile("wfi");
+  }
+
+  uint64 end_time = get_time();
+  printf("[PASS] timer interrupts %d -> %d (delta %d cycles)\n",
+         (int)start_ticks, (int)get_ticks(), (int)(end_time - start_time));
+}
+
+void test_interrupt_overhead(void) {
+  printf("[TEST] interrupt overhead measurement\n");
+
+  volatile int dummy = 0;
+  uint64 t0 = get_time();
+  for(int i = 0; i < 100000; i++) {
+    dummy += i;
+  }
+  uint64 t1 = get_time();
+
+  intr_off();
+  uint64 t2 = get_time();
+  for(int i = 0; i < 100000; i++) {
+    dummy += i;
+  }
+  uint64 t3 = get_time();
+  intr_on();
+
+  printf("[INFO] with interrupts: %d cycles, without: %d cycles (dummy=%d)\n",
+         (int)(t1 - t0), (int)(t3 - t2), dummy);
+  printf("[PASS] interrupt overhead measurement\n");
+}
+
+__attribute__((noinline))
+static void trigger_store_fault(void) {
+  volatile uint64 *bad = (volatile uint64 *)(KERNBASE - PGSIZE);
+  *bad = 0x1234;
+}
+
+void test_exception_handling(void) {
+  printf("[TEST] exception handling\n");
+  uint64 before = get_ticks();
+  trigger_store_fault();
+  printf("[PASS] exception handled, ticks %d -> %d\n",
+         (int)before, (int)get_ticks());
+}

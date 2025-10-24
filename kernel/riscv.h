@@ -6,16 +6,32 @@
 #define r_mhartid() ({ uint64_t x; asm volatile("csrr %0, mhartid" : "=r"(x)); x; })
 #define r_mstatus() ({ uint64_t x; asm volatile("csrr %0, mstatus" : "=r"(x)); x; })
 #define r_mie() ({ uint64_t x; asm volatile("csrr %0, mie" : "=r"(x)); x; })
+#define r_sstatus() ({ uint64_t x; asm volatile("csrr %0, sstatus" : "=r"(x)); x; })
+#define r_scause() ({ uint64_t x; asm volatile("csrr %0, scause" : "=r"(x)); x; })
+#define r_sepc() ({ uint64_t x; asm volatile("csrr %0, sepc" : "=r"(x)); x; })
+#define r_stval() ({ uint64_t x; asm volatile("csrr %0, stval" : "=r"(x)); x; })
+#define r_sip() ({ uint64_t x; asm volatile("csrr %0, sip" : "=r"(x)); x; })
 #define r_satp() ({ uint64_t x; asm volatile("csrr %0, satp" : "=r"(x)); x; })
 #define r_sie() ({ uint64_t x; asm volatile("csrr %0, sie" : "=r"(x)); x; })
+#define r_time() ({ uint64_t x; asm volatile("csrr %0, time" : "=r"(x)); x; })
+#define r_mcounteren() ({ uint64_t x; asm volatile("csrr %0, mcounteren" : "=r"(x)); x; })
+#define r_menvcfg() ({ uint64_t x; asm volatile("csrr %0, menvcfg" : "=r"(x)); x; })
 
 #define w_mstatus(x) asm volatile("csrw mstatus, %0" :: "r"(x))
 #define w_mie(x) asm volatile("csrw mie, %0" :: "r"(x))
+#define w_sstatus(x) asm volatile("csrw sstatus, %0" :: "r"(x))
 #define w_satp(x) asm volatile("csrw satp, %0" :: "r"(x))
 #define w_sie(x) asm volatile("csrw sie, %0" :: "r"(x))
 #define w_stvec(x) asm volatile("csrw stvec, %0" :: "r"(x))
 #define w_medeleg(x) asm volatile("csrw medeleg, %0" :: "r"(x))
 #define w_mideleg(x) asm volatile("csrw mideleg, %0" :: "r"(x))
+#define w_sepc(x) asm volatile("csrw sepc, %0" :: "r"(x))
+#define w_sip(x) asm volatile("csrw sip, %0" :: "r"(x))
+#define w_mtvec(x) asm volatile("csrw mtvec, %0" :: "r"(x))
+#define w_mepc(x) asm volatile("csrw mepc, %0" :: "r"(x))
+#define w_mcounteren(x) asm volatile("csrw mcounteren, %0" :: "r"(x))
+#define w_menvcfg(x) asm volatile("csrw menvcfg, %0" :: "r"(x))
+#define w_stimecmp(x) asm volatile("csrw stimecmp, %0" :: "r"(x))
 
 /* TLB 刷新 */
 #define sfence_vma() asm volatile("sfence.vma zero, zero")
@@ -60,9 +76,27 @@
 #define KERNBASE 0x80000000L
 #define PHYSTOP (KERNBASE + 128*1024*1024)  /* 假设 128MB 物理内存 */
 
+/* 状态位 */
+#define SSTATUS_SIE (1L << 1)
+#define SSTATUS_SPIE (1L << 5)
+#define SSTATUS_SPP (1L << 8)
+
+#define SIE_SSIE (1L << 1)
+#define SIE_STIE (1L << 5)
+#define SIE_SEIE (1L << 9)
+
+#define SIP_SSIP (1L << 1)
+#define SIP_STIP (1L << 5)
+#define SIP_SEIP (1L << 9)
+
+#define MSTATUS_MPP_MASK (3ULL << 11)
+#define MSTATUS_MPP_S (1ULL << 11)
+
 /* 设备地址 */
 #define UART0 0x10000000L
 #define CLINT 0x2000000L
+#define CLINT_MTIMECMP(hart) (CLINT + 0x4000 + ((uint64)(hart) * 8))
+#define CLINT_MTIME (CLINT + 0xBFF8)
 
 /* 页表类型 */
 typedef uint64_t pte_t;

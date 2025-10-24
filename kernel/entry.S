@@ -33,6 +33,28 @@ _entry:
   or   t0, t0, t1
   csrw mstatus, t0
 
+  /* 委托异常和中断给 S 态 */
+  li   t0, 0xffff
+  csrw medeleg, t0
+  li   t0, (1 << 1) | (1 << 5) | (1 << 9)  /* 软件/时钟/外部中断 */
+  csrw mideleg, t0
+
+  /* 启用机器级定时器中断（必要条件之一） */
+  csrr t0, mie
+  li   t1, (1 << 5)
+  or   t0, t0, t1
+  csrw mie, t0
+
+  /* 启用 Sstc 扩展，允许 S 态访问 stimecmp */
+  csrr t0, menvcfg
+  li   t1, (1 << 63)
+  or   t0, t0, t1
+  csrw menvcfg, t0
+
+  /* 允许 S 态访问 time 寄存器 */
+  li   t0, 0x7
+  csrw mcounteren, t0
+
   /* mepc <- start */
   la   t0, start
   csrw mepc, t0
@@ -56,5 +78,3 @@ stack0:
 stack0_end:
   .globl bss_end
 bss_end:
-
-
