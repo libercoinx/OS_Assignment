@@ -1,35 +1,58 @@
-ARCH  := riscv64
-CC    := riscv64-unknown-elf-gcc
-OBJCOPY := riscv64-unknown-elf-objcopy
-CFLAGS:= -march=rv64gc -mabi=lp64 -mcmodel=medany -nostdlib -nostartfiles -ffreestanding -O2 -Wall -Wextra -I ./include -I ./kernel
-LDFLAGS := -T kernel.ld -nostdlib -static
+ARCH     := riscv64
+CC       := riscv64-unknown-elf-gcc
+OBJCOPY  := riscv64-unknown-elf-objcopy
+SRC_DIR  := kernel
+BUILD_DIR:= build
+OBJ_DIR  := $(BUILD_DIR)/obj
 
-OBJS := kernel/entry.o kernel/start.o kernel/trampoline.o kernel/kernelvec.o kernel/trap.o kernel/main.o kernel/uart.o kernel/console.o kernel/printf.o kernel/string.o kernel/panic.o kernel/kalloc.o kernel/vm.o kernel/test.o
+CFLAGS  := -march=rv64gc -mabi=lp64 -mcmodel=medany -nostdlib -nostartfiles -ffreestanding -O2 -Wall -Wextra -I ./include -I ./kernel
+LDFLAGS := -nostdlib -static
 
-all: kernel.elf kernel.bin
+C_SRCS := \
+  boot/start.c \
+  core/main.c \
+  core/panic.c \
+  core/test.c \
+  drivers/console.c \
+  drivers/uart.c \
+  lib/printf.c \
+  lib/string.c \
+  mm/kalloc.c \
+  mm/vm.c \
+  trap/trap.c
 
-kernel.elf: $(OBJS) kernel/kernel.ld
-	$(CC) $(CFLAGS) -o $@ $(OBJS) -T kernel/kernel.ld -nostdlib -static
+S_SRCS := \
+  boot/entry.S \
+  trap/kernelvec.S \
+  trap/trampoline.S
 
-kernel.bin: kernel.elf
+C_OBJS := $(addprefix $(OBJ_DIR)/,$(C_SRCS:.c=.o))
+S_OBJS := $(addprefix $(OBJ_DIR)/,$(S_SRCS:.S=.o))
+OBJS   := $(C_OBJS) $(S_OBJS)
+
+all: $(BUILD_DIR)/kernel.elf $(BUILD_DIR)/kernel.bin
+
+$(BUILD_DIR)/kernel.elf: $(OBJS) $(SRC_DIR)/kernel.ld | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) -T $(SRC_DIR)/kernel.ld $(LDFLAGS)
+
+$(BUILD_DIR)/kernel.bin: $(BUILD_DIR)/kernel.elf | $(BUILD_DIR)
 	$(OBJCOPY) -O binary $< $@
 
-kernel/entry.o: kernel/entry.S
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-kernel/trampoline.o: kernel/trampoline.S
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.S
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-kernel/kernelvec.o: kernel/kernelvec.S
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-kernel/%.o: kernel/%.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-run: kernel.elf
-	qemu-system-riscv64 -machine virt -nographic -serial mon:stdio -bios none -kernel kernel.elf
+$(BUILD_DIR):
+	mkdir -p $@
 
 clean:
-	rm -f kernel/*.o kernel.elf kernel.bin
+	rm -rf $(BUILD_DIR)
 
-.PHONY: all run clean
+run: $(BUILD_DIR)/kernel.elf
+	qemu-system-riscv64 -machine virt -nographic -serial mon:stdio -bios none -kernel $<
+
+.PHONY: all clean run
