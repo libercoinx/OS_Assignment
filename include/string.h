@@ -5,4 +5,4 @@
 void *memset(void *dst, int c, unsigned n);
 void *memmove(void *dst, const void *src, unsigned n);
 void *memcpy(void *dst, const void *src, unsigned n);
-
+unsigned strlcpy(char *dst, const char *src, int n);

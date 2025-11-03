@@ -13,6 +13,18 @@ void goto_xy(int col, int row);   /* \033[{row};{col}H */
 int printf(const char *fmt, ...);
 void printfint(int x);
 
+// proc.c
+void procinit(void);
+int create_process(const char *name, void (*fn)(void *), void *arg);
+void exit_process(int status);
+int wait_process(int *status);
+void scheduler(void) __attribute__((noreturn));
+int sys_getpid(void);
+int sys_yield(void);
+int sys_kill(int pid);
+int sys_wait(int *status);
+int sys_exit(int status);
+
 // test.c
 void test_printf_basic();
 void test_printf_edge_cases();
@@ -22,3 +34,4 @@ void test_virtual_memory(void);
 void test_timer_interrupt(void);
 void test_interrupt_overhead(void);
 void test_exception_handling(void);
+void run_proc_tests(void *arg);

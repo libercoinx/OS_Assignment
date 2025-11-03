@@ -5,6 +5,7 @@
 #include "string.h"
 #include "vm.h"
 #include "trap.h"
+#include "proc.h"
 
 #define TEST_ASSERT(cond, msg)                                      \
   do {                                                              \
@@ -13,6 +14,12 @@
       panic("test failure");                                        \
     }                                                               \
   } while(0)
+
+static volatile int shared_counter;
+static volatile int yield_counts[3];
+static struct spinlock sleep_test_lock;
+static volatile int sleep_ready;
+static volatile int sleep_value;
 
 void test_printf_basic(void) {
   printf("Testing integer: %d\n", 42);
@@ -150,4 +157,125 @@ void test_exception_handling(void) {
   trigger_store_fault();
   printf("[PASS] exception handled, ticks %d -> %d\n",
          (int)before, (int)get_ticks());
+}
+
+static void counter_task(void *arg) {
+  int delta = (int)(uint64)arg;
+  shared_counter += delta;
+}
+
+void test_process_creation_basic(void) {
+  printf("[TEST] process creation\n");
+  shared_counter = 0;
+  int pid = create_process("counter-child", counter_task, (void *)1);
+  TEST_ASSERT(pid > 0, "create_process failed");
+
+  int status = -1;
+  int waited = wait_process(&status);
+  TEST_ASSERT(waited == pid, "wait_process returned unexpected pid");
+  TEST_ASSERT(status == 0, "child exit status non-zero");
+  TEST_ASSERT(shared_counter == 1, "shared counter mismatch");
+  printf("[PASS] process creation\n");
+}
+
+#define YIELD_TASKS 3
+#define YIELD_ITERS 5
+
+static void yield_task(void *arg) {
+  int id = (int)(uint64)arg;
+  for(int i = 0; i < YIELD_ITERS; i++) {
+    yield_counts[id]++;
+    sys_yield();
+  }
+}
+
+void test_scheduler_round_robin(void) {
+  printf("[TEST] scheduler round robin\n");
+  memset((void *)yield_counts, 0, sizeof(yield_counts));
+
+  int pids[YIELD_TASKS];
+  for(int i = 0; i < YIELD_TASKS; i++) {
+    pids[i] = create_process("yield-task", yield_task, (void *)(uint64)i);
+    TEST_ASSERT(pids[i] > 0, "failed to create yield task");
+  }
+
+  int finished[YIELD_TASKS] = {0};
+  int remaining = YIELD_TASKS;
+  int status;
+  while(remaining > 0) {
+    int pid = wait_process(&status);
+    TEST_ASSERT(pid > 0, "wait_process failed");
+    TEST_ASSERT(status == 0, "yield task exit status non-zero");
+    int idx = -1;
+    for(int j = 0; j < YIELD_TASKS; j++) {
+      if(pids[j] == pid) {
+        idx = j;
+        break;
+      }
+    }
+    TEST_ASSERT(idx != -1, "unexpected child pid");
+    TEST_ASSERT(finished[idx] == 0, "duplicate wait on child");
+    finished[idx] = 1;
+    remaining--;
+  }
+
+  for(int i = 0; i < YIELD_TASKS; i++) {
+    TEST_ASSERT(yield_counts[i] == YIELD_ITERS, "yield iterations mismatch");
+  }
+  printf("[PASS] scheduler round robin\n");
+}
+
+static void sleeper_task(void *arg) {
+  (void)arg;
+  acquire(&sleep_test_lock);
+  while(!sleep_ready)
+    sleep((void *)&sleep_ready, &sleep_test_lock);
+  TEST_ASSERT(sleep_value == 0x1234, "sleep value corrupted");
+  release(&sleep_test_lock);
+}
+
+static void waker_task(void *arg) {
+  (void)arg;
+  acquire(&sleep_test_lock);
+  sleep_value = 0x1234;
+  sleep_ready = 1;
+  wakeup((void *)&sleep_ready);
+  release(&sleep_test_lock);
+}
+
+void test_sleep_wakeup_mechanism(void) {
+  printf("[TEST] sleep/wakeup\n");
+  initlock(&sleep_test_lock, "sleep-test");
+  sleep_ready = 0;
+  sleep_value = 0;
+
+  int sleeper = create_process("sleeper", sleeper_task, 0);
+  TEST_ASSERT(sleeper > 0, "sleeper creation failed");
+
+  sys_yield();
+
+  int waker = create_process("waker", waker_task, 0);
+  TEST_ASSERT(waker > 0, "waker creation failed");
+
+  int status;
+  int completed = 0;
+  while(completed < 2) {
+    int pid = wait_process(&status);
+    TEST_ASSERT(pid == sleeper || pid == waker, "unexpected child pid");
+    TEST_ASSERT(status == 0, "child exit status non-zero");
+    completed++;
+  }
+
+  TEST_ASSERT(sleep_ready == 1, "sleep flag not set");
+  TEST_ASSERT(sleep_value == 0x1234, "sleep value not written");
+  printf("[PASS] sleep/wakeup\n");
+}
+
+void run_proc_tests(void *arg) {
+  (void)arg;
+  printf("[SUITE] running kernel tests\n");
+  test_process_creation_basic();
+  test_scheduler_round_robin();
+  test_sleep_wakeup_mechanism();
+  printf("[SUITE] all tests finished\n");
 }

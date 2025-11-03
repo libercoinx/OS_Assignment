@@ -34,3 +34,14 @@ void *memcpy(void *dst, const void *src, unsigned n) {
   return memmove(dst, src, n);
 }
 
+unsigned strlcpy(char *dst, const char *src, int n) {
+  unsigned i;
+  if(n <= 0)
+    return 0;
+  for(i = 0; i + 1 < (unsigned)n && src[i]; i++)
+    dst[i] = src[i];
+  dst[i] = '\0';
+  while(src[i])
+    i++;
+  return i;
+}

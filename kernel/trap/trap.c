@@ -2,6 +2,7 @@
 #include "defs.h"
 #include "panic.h"
 #include "string.h"
+#include "proc.h"
 
 #define INST_16_MASK 0x3
 
@@ -114,6 +115,11 @@ void kerneltrap(void) {
   if(scause & (1ULL << 63)) {
     int irq = (int)(scause & 0xff);
     dispatch_interrupt(irq);
+    if(irq == IRQ_S_TIMER) {
+      struct proc *p = myproc();
+      if(p && p->state == RUNNING)
+        yield();
+    }
   } else {
     struct trapframe tf = {
       .sepc = sepc,
@@ -138,6 +144,7 @@ static void set_next_timer_tick(void) {
 
 static void timer_interrupt_handler(void) {
   ticks++;
+  wakeup((void *)&ticks);
   set_next_timer_tick();
   w_sip(r_sip() & ~SIP_STIP);
 }

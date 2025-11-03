@@ -15,6 +15,8 @@ C_SRCS := \
   core/test.c \
   drivers/console.c \
   drivers/uart.c \
+  proc/proc.c \
+  proc/sysproc.c \
   lib/printf.c \
   lib/string.c \
   mm/kalloc.c \
@@ -23,6 +25,7 @@ C_SRCS := \
 
 S_SRCS := \
   boot/entry.S \
+  proc/swtch.S \
   trap/kernelvec.S \
   trap/trampoline.S
 
