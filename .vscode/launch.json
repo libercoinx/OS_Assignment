@@ -2,39 +2,18 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug kernel.elf (QEMU + gdb)",
+      "name": "RISC-V QEMU",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/kernel.elf",
-      "cwd": "${workspaceFolder}",
-      "stopAtEntry": false,
       "MIMode": "gdb",
       "miDebuggerPath": "/usr/bin/gdb-multiarch",
+      "program": "${workspaceFolder}/build/kernel.elf",
+      "cwd": "${workspaceFolder}",
+      "miDebuggerServerAddress": "localhost:1234",
       "setupCommands": [
-        {
-          "text": "set confirm off"
-        },
-        {
-          "text": "directory ${workspaceFolder}"
-        },
-        {
-          "text": "symbol-file ${workspaceFolder}/kernel.elf"
-        }
-      ],
-      "launchCompleteCommand": "None",
-      "preLaunchTask": "Run QEMU (gdbserver)",
-      "postDebugTask": "Terminate QEMU",
-      "customLaunchSetupCommands": [
-        {
-          "text": "target remote localhost:1234"
-        },
-        {
-          "text": "load"
-        }
-      ],
-      "sourceFileMap": {
-        "/home/maroo/SystemExp/riscv-os": "${workspaceFolder}"
-      }
+        { "text": "set arch riscv:rv64" },
+        { "text": "set pagination off" }
+      ]
     }
   ]
 }

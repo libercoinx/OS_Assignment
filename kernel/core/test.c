@@ -6,6 +6,8 @@
 #include "vm.h"
 #include "trap.h"
 #include "proc.h"
+#include "fs.h"
+#include "kalloc.h"
 
 #define TEST_ASSERT(cond, msg)                                      \
   do {                                                              \
@@ -20,6 +22,41 @@ static volatile int yield_counts[3];
 static struct spinlock sleep_test_lock;
 static volatile int sleep_ready;
 static volatile int sleep_value;
+
+#define FS_CONCUR_WORKERS 1
+#define FS_CONCUR_ITERS   1
+#define FS_PERF_SMALL_FILES 16
+#define FS_LARGE_BLOCKS   16
+static char fs_large_buffer[BSIZE * FS_LARGE_BLOCKS];
+
+static int append_uint(char *dst, int value) {
+  char tmp[16];
+  int len = 0;
+  if(value == 0) {
+    tmp[len++] = '0';
+  } else {
+    while(value > 0 && len < (int)sizeof(tmp)) {
+      tmp[len++] = '0' + (value % 10);
+      value /= 10;
+    }
+  }
+  for(int i = len - 1; i >= 0; i--)
+    *dst++ = tmp[i];
+  return len;
+}
+
+static void format_name(char *dst, const char *prefix, int idx) {
+  int i = 0;
+  while(prefix[i] && i < DIRSIZ - 2) {
+    dst[i] = prefix[i];
+    i++;
+  }
+  dst[i++] = '_';
+  i += append_uint(dst + i, idx);
+  if(i >= DIRSIZ)
+    i = DIRSIZ - 1;
+  dst[i] = 0;
+}
 
 void test_printf_basic(void) {
   printf("Testing integer: %d\n", 42);
@@ -278,4 +315,140 @@ void run_proc_tests(void *arg) {
   test_scheduler_round_robin();
   test_sleep_wakeup_mechanism();
   printf("[SUITE] all tests finished\n");
+}
+
+
+void test_filesystem_smoke(void) {
+  printf("[TEST] filesystem smoke\n");
+  const char *path = "/demo";
+  const char *payload = "Hello, filesystem!";
+  char buf[64];
+
+  int written = fs_write_file(path, payload, strlen(payload));
+  TEST_ASSERT(written == (int)strlen(payload), "write mismatch");
+  int size = fs_file_size(path);
+  TEST_ASSERT(size == (int)strlen(payload), "size mismatch");
+  memset(buf, 0, sizeof(buf));
+  int read = fs_read_file(path, buf, sizeof(buf));
+  TEST_ASSERT(read == (int)strlen(payload), "read mismatch");
+  TEST_ASSERT(strncmp(buf, payload, strlen(payload)) == 0, "content mismatch");
+  TEST_ASSERT(fs_delete_file(path) == 0, "delete failed");
+  TEST_ASSERT(fs_read_file(path, buf, sizeof(buf)) < 0, "deleted file still readable");
+  printf("[PASS] filesystem smoke\n");
+}
+
+void test_filesystem_integrity(void) {
+  printf("[TEST] filesystem integrity\n");
+  const char *path = "/fs_integrity";
+  const char *msg = "Hello, filesystem!";
+  char buf[64];
+
+  TEST_ASSERT(fs_write_file(path, msg, strlen(msg)) == (int)strlen(msg),
+              "integrity write mismatch");
+  TEST_ASSERT(fs_file_size(path) == (int)strlen(msg), "integrity size mismatch");
+  memset(buf, 0, sizeof(buf));
+  TEST_ASSERT(fs_read_file(path, buf, sizeof(buf)) == (int)strlen(msg),
+              "integrity read mismatch");
+  TEST_ASSERT(strncmp(buf, msg, strlen(msg)) == 0, "integrity content mismatch");
+  TEST_ASSERT(fs_delete_file(path) == 0, "integrity delete failed");
+  printf("[PASS] filesystem integrity\n");
+}
+
+static void concurrent_worker(void *arg) {
+  int id = (int)(uint64)arg;
+  char name[DIRSIZ];
+  uint32 value;
+  for(int iter = 0; iter < FS_CONCUR_ITERS; iter++) {
+    format_name(name, "concur", id * FS_CONCUR_ITERS + iter);
+    value = ((uint32)id << 16) | (uint32)iter;
+    TEST_ASSERT(fs_write_file(name, (char *)&value, sizeof(value)) == (int)sizeof(value),
+                "concurrent write failed");
+    TEST_ASSERT(fs_delete_file(name) == 0, "concurrent delete failed");
+  }
+}
+
+void test_concurrent_access(void) {
+  printf("[TEST] filesystem concurrent access\n");
+  int pids[FS_CONCUR_WORKERS];
+  for(int i = 0; i < FS_CONCUR_WORKERS; i++) {
+    pids[i] = create_process("fs-worker", concurrent_worker, (void *)(uint64)i);
+    TEST_ASSERT(pids[i] > 0, "fs worker spawn failed");
+  }
+  int finished[FS_CONCUR_WORKERS] = {0};
+  int remaining = FS_CONCUR_WORKERS;
+  int status;
+  while(remaining > 0) {
+    int pid = wait_process(&status);
+    TEST_ASSERT(pid > 0, "fs worker wait failed");
+    TEST_ASSERT(status == 0, "fs worker exit status");
+    int idx = -1;
+    for(int i = 0; i < FS_CONCUR_WORKERS; i++) {
+      if(pids[i] == pid) {
+        idx = i;
+        break;
+      }
+    }
+    TEST_ASSERT(idx != -1, "fs worker pid unknown");
+    TEST_ASSERT(finished[idx] == 0, "fs worker duplicate wait");
+    finished[idx] = 1;
+    remaining--;
+  }
+  printf("[PASS] filesystem concurrent access\n");
+}
+
+void test_crash_recovery(void) {
+  printf("[TEST] filesystem crash recovery\n");
+  const char *path = "/fs_crash";
+  const char *payload = "journal-entry";
+  char buf[32];
+
+  TEST_ASSERT(fs_write_file(path, payload, strlen(payload)) == (int)strlen(payload),
+              "crash write failed");
+  fs_force_recovery();
+  TEST_ASSERT(fs_read_file(path, buf, sizeof(buf)) == (int)strlen(payload),
+              "crash read failed");
+  TEST_ASSERT(strncmp(buf, payload, strlen(payload)) == 0, "crash data mismatch");
+  TEST_ASSERT(fs_delete_file(path) == 0, "crash delete failed");
+  fs_force_recovery();
+  TEST_ASSERT(fs_read_file(path, buf, sizeof(buf)) < 0, "crash cleanup failed");
+  printf("[PASS] filesystem crash recovery\n");
+}
+
+void test_filesystem_performance(void) {
+  printf("[TEST] filesystem performance\n");
+  char name[DIRSIZ];
+  const char *small_data = "test";
+  uint64 start = get_time();
+  for(int i = 0; i < FS_PERF_SMALL_FILES; i++) {
+    format_name(name, "small", i);
+    TEST_ASSERT(fs_write_file(name, small_data, strlen(small_data)) == (int)strlen(small_data),
+                "perf small write failed");
+  }
+  uint64 small_time = get_time() - start;
+  for(int i = 0; i < FS_PERF_SMALL_FILES; i++) {
+    format_name(name, "small", i);
+    TEST_ASSERT(fs_delete_file(name) == 0, "perf small delete failed");
+  }
+
+  memset(fs_large_buffer, 0xab, sizeof(fs_large_buffer));
+  start = get_time();
+  TEST_ASSERT(fs_write_file("/large_file", fs_large_buffer, sizeof(fs_large_buffer)) ==
+              (int)sizeof(fs_large_buffer), "perf large write failed");
+  uint64 large_time = get_time() - start;
+  TEST_ASSERT(fs_delete_file("/large_file") == 0, "perf large delete failed");
+
+  printf("[INFO] small files (%d x %dB): %d cycles\n",
+         FS_PERF_SMALL_FILES, (int)strlen(small_data), (int)small_time);
+  printf("[INFO] large file (%dB): %d cycles\n",
+         (int)sizeof(fs_large_buffer), (int)large_time);
+  printf("[PASS] filesystem performance\n");
+}
+
+void run_fs_tests(void *arg) {
+  (void)arg;
+  test_filesystem_smoke();
+  test_filesystem_integrity();
+  test_concurrent_access();
+  test_crash_recovery();
+  test_filesystem_performance();
 }

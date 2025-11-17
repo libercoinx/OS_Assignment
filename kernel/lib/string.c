@@ -45,3 +45,33 @@ unsigned strlcpy(char *dst, const char *src, int n) {
     i++;
   return i;
 }
+
+int strncmp(const char *s1, const char *s2, unsigned n) {
+  while(n > 0 && *s1 && (*s1 == *s2)) {
+    n--;
+    s1++;
+    s2++;
+  }
+  if(n == 0)
+    return 0;
+  return (unsigned char)*s1 - (unsigned char)*s2;
+}
+
+char *strncpy(char *dst, const char *src, int n) {
+  char *ret = dst;
+  while(n-- > 0) {
+    if((*dst++ = *src++) == 0) {
+      while(n-- > 0)
+        *dst++ = 0;
+      break;
+    }
+  }
+  return ret;
+}
+
+unsigned strlen(const char *s) {
+  unsigned n = 0;
+  while(s[n])
+    n++;
+  return n;
+}

@@ -4,6 +4,7 @@
 #include "vm.h"
 #include "trap.h"
 #include "proc.h"
+#include "fs.h"
 #include "panic.h"
 
 void main(void) {
@@ -11,10 +12,13 @@ void main(void) {
   kinit();
   kvminit();
   kvminithart();
+  fileinit();
+  fs_init();
+
   procinit();
   timer_init();
   intr_on();
-  if(create_process("test-runner", run_proc_tests, 0) < 0)
+  if(create_process("fs-tests", run_fs_tests, 0) < 0)
     panic("create_process");
-  scheduler();
+  scheduler();  // 不会返回
 }

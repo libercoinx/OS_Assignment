@@ -107,15 +107,24 @@ typedef uint64_t uint64;
 typedef uint32_t uint32;
 typedef uint16_t uint16;
 typedef uint8_t uint8;
+typedef uint32 uint;
+typedef uint16 ushort;
+typedef uint8 uchar;
 
 /* 单核版本：简化锁机制 */
 struct spinlock {
-  int locked;
+  volatile int locked;
 };
 
 #define initlock(lock, name) ((lock)->locked = 0)
-#define acquire(lock) ((lock)->locked = 1)
-#define release(lock) ((lock)->locked = 0)
+#define acquire(lock) \
+  do { \
+    while(__sync_lock_test_and_set(&(lock)->locked, 1) != 0) ; \
+  } while(0)
+#define release(lock) (__sync_lock_release(&(lock)->locked))
+static inline int holding(struct spinlock *lk) {
+  return lk->locked != 0;
+}
 
 /* 内存布局符号 */
 extern char end[];  /* 内核结束地址，由链接脚本提供 */

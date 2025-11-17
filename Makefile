@@ -5,7 +5,7 @@ SRC_DIR  := kernel
 BUILD_DIR:= build
 OBJ_DIR  := $(BUILD_DIR)/obj
 
-CFLAGS  := -march=rv64gc -mabi=lp64 -mcmodel=medany -nostdlib -nostartfiles -ffreestanding -O2 -Wall -Wextra -I ./include -I ./kernel
+CFLAGS  := -march=rv64gc -mabi=lp64 -mcmodel=medany -nostdlib -nostartfiles -ffreestanding -O0 -g -Wall -Wextra -I ./include -I ./kernel
 LDFLAGS := -nostdlib -static
 
 C_SRCS := \
@@ -15,6 +15,10 @@ C_SRCS := \
   core/test.c \
   drivers/console.c \
   drivers/uart.c \
+  fs/bio.c \
+  fs/log.c \
+  fs/fs.c \
+  fs/file.c \
   proc/proc.c \
   proc/sysproc.c \
   lib/printf.c \
