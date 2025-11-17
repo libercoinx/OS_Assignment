@@ -13,23 +13,108 @@ static struct spinlock pid_lock;
 static struct spinlock wait_lock;
 struct cpu cpus[NCPU];
 
+#define MLFQ_LEVELS 3
+static const int mlfq_quanta[MLFQ_LEVELS] = {2, 4, 8};
+
+struct runqueue {
+  struct proc *head;
+  struct proc *tail;
+};
+
+static struct runqueue runq[MLFQ_LEVELS];
+static struct spinlock runq_lock;
+
 static int nextpid = 1;
 
 static void proc_entry(void) __attribute__((noreturn));
 static void freeproc(struct proc *p);
 static int allocpid(void);
 static int intr_get(void);
+static void runq_push(struct proc *p);
+static struct proc* runq_pop(void);
+static void make_runnable(struct proc *p, int boost);
+static void reset_budget(struct proc *p);
 
 void
 procinit(void) {
   initlock(&pid_lock, "pid");
   initlock(&wait_lock, "wait");
+  initlock(&runq_lock, "mlfq");
+  for(int i = 0; i < MLFQ_LEVELS; i++) {
+    runq[i].head = 0;
+    runq[i].tail = 0;
+  }
   for(int i = 0; i < NPROC; i++) {
     struct proc *p = &proc[i];
     initlock(&p->lock, "proc");
     p->state = UNUSED;
     p->kstack = 0;
+    p->priority = 0;
+    p->slice_ticks = 0;
+    p->timeslice_expired = 0;
+    p->runq_next = 0;
+    p->runq_queued = 0;
   }
+}
+
+static void
+reset_budget(struct proc *p) {
+  p->slice_ticks = 0;
+  p->timeslice_expired = 0;
+}
+
+static void
+runq_push(struct proc *p) {
+  int level = p->priority;
+  if(level < 0)
+    level = 0;
+  if(level >= MLFQ_LEVELS)
+    level = MLFQ_LEVELS - 1;
+  acquire(&runq_lock);
+  if(p->runq_queued)
+    panic("runq_push");
+  p->priority = level;
+  struct runqueue *rq = &runq[level];
+  p->runq_next = 0;
+  if(rq->tail)
+    rq->tail->runq_next = p;
+  else
+    rq->head = p;
+  rq->tail = p;
+  p->runq_queued = 1;
+  release(&runq_lock);
+}
+
+static struct proc*
+runq_pop(void) {
+  struct proc *p = 0;
+  acquire(&runq_lock);
+  for(int level = 0; level < MLFQ_LEVELS; level++) {
+    struct runqueue *rq = &runq[level];
+    if(rq->head) {
+      p = rq->head;
+      rq->head = p->runq_next;
+      if(rq->head == 0)
+        rq->tail = 0;
+      p->runq_next = 0;
+      p->runq_queued = 0;
+      break;
+    }
+  }
+  release(&runq_lock);
+  return p;
+}
+
+static void
+make_runnable(struct proc *p, int boost) {
+  if(boost)
+    p->priority = 0;
+  if(p->priority < 0)
+    p->priority = 0;
+  if(p->priority >= MLFQ_LEVELS)
+    p->priority = MLFQ_LEVELS - 1;
+  reset_budget(p);
+  runq_push(p);
 }
 
 static int
@@ -104,6 +189,11 @@ freeproc(struct proc *p) {
   p->kthread.start = 0;
   p->kthread.arg = 0;
   memset(&p->context, 0, sizeof(p->context));
+  p->priority = 0;
+  p->slice_ticks = 0;
+  p->timeslice_expired = 0;
+  p->runq_next = 0;
+  p->runq_queued = 0;
 }
 
 struct proc*
@@ -141,6 +231,10 @@ alloc_process(void) {
       memset(&p->context, 0, sizeof(p->context));
       p->context.sp = p->kstack + KSTACK_SIZE;
       p->context.ra = (uint64)proc_entry;
+      p->priority = 0;
+      reset_budget(p);
+      p->runq_next = 0;
+      p->runq_queued = 0;
       return p;
     }
     release(&p->lock);
@@ -181,6 +275,7 @@ create_process(const char *name, void (*fn)(void *), void *arg) {
   p->kthread.arg = arg;
   p->parent = myproc();
   p->state = RUNNABLE;
+  make_runnable(p, 1);
   release(&p->lock);
   return p->pid;
 }
@@ -265,7 +360,14 @@ yield(void) {
   if(p == 0)
     return;
   acquire(&p->lock);
+  if(p->state != RUNNING) {
+    release(&p->lock);
+    return;
+  }
+  if(p->timeslice_expired && p->priority < MLFQ_LEVELS - 1)
+    p->priority++;
   p->state = RUNNABLE;
+  make_runnable(p, 0);
   sched();
   release(&p->lock);
 }
@@ -286,6 +388,7 @@ sleep(void *chan, struct spinlock *lk) {
 
   p->chan = chan;
   p->state = SLEEPING;
+  reset_budget(p);
 
   sched();
 
@@ -306,6 +409,7 @@ wakeup(void *chan) {
     acquire(&p->lock);
     if(p->state == SLEEPING && p->chan == chan) {
       p->state = RUNNABLE;
+      make_runnable(p, 1);
     }
     release(&p->lock);
   }
@@ -318,8 +422,10 @@ kill(int pid) {
     acquire(&p->lock);
     if(p->pid == pid && (p->state == SLEEPING || p->state == RUNNABLE || p->state == RUNNING || p->state == USED)) {
       p->killed = 1;
-      if(p->state == SLEEPING)
+      if(p->state == SLEEPING) {
         p->state = RUNNABLE;
+        make_runnable(p, 1);
+      }
       release(&p->lock);
       return 0;
     }
@@ -334,16 +440,39 @@ scheduler(void) {
   c->proc = 0;
   for(;;) {
     intr_on();
-    for(int i = 0; i < NPROC; i++) {
-      struct proc *p = &proc[i];
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-        c->proc = 0;
-      }
+    struct proc *p = runq_pop();
+    if(p == 0)
+      continue;
+    acquire(&p->lock);
+    if(p->state != RUNNABLE) {
       release(&p->lock);
+      continue;
+    }
+    p->state = RUNNING;
+    reset_budget(p);
+    c->proc = p;
+    swtch(&c->context, &p->context);
+    c->proc = 0;
+    release(&p->lock);
+  }
+}
+
+void
+scheduler_tick(void) {
+  struct proc *p = myproc();
+  if(p == 0)
+    return;
+  int need_yield = 0;
+  acquire(&p->lock);
+  if(p->state == RUNNING) {
+    p->slice_ticks++;
+    int quantum = mlfq_quanta[p->priority];
+    if(p->slice_ticks >= quantum) {
+      p->timeslice_expired = 1;
+      need_yield = 1;
     }
   }
+  release(&p->lock);
+  if(need_yield)
+    yield();
 }

@@ -116,9 +116,7 @@ void kerneltrap(void) {
     int irq = (int)(scause & 0xff);
     dispatch_interrupt(irq);
     if(irq == IRQ_S_TIMER) {
-      struct proc *p = myproc();
-      if(p && p->state == RUNNING)
-        yield();
+      scheduler_tick();
     }
   } else {
     struct trapframe tf = {

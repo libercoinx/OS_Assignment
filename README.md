@@ -32,7 +32,8 @@ kernel/
 
 - **CPU & 调度器**
   - 单 CPU (`NCPU=1`)，使用 `struct cpu` 记录当前进程、嵌套禁止中断次数以及恢复前的中断状态。
-  - `scheduler()` 采用轮转方式遍历进程表，挑选 `RUNNABLE` 进程并通过 `swtch` 切换。
+  - 调度策略升级为 3 级多级反馈队列（MLFQ）：新建/被唤醒的进程进入最高优先级队列，时间片分别为 2/4/8 个时钟；若消耗完整时间片则降级，若因睡眠/阻塞返回则直接回到最高级。
+  - 运行队列由 `scheduler()` 通过 `runq_pop()` 获取最高优先级的进程，并在时间片开始时重置计数；时钟中断调用 `scheduler_tick()` 递增片内已用 tick，超限后设置 `timeslice_expired` 触发主动 `yield()`。
   - `proc_entry()` 作为所有内核线程的起点，释放进程锁后执行注册的函数，结束后调用 `exit_process()`。
 
 - **上下文切换 (`swtch.S`)**
@@ -41,7 +42,7 @@ kernel/
 
 - **同步与睡眠**
   - `sleep(chan, lk)` / `wakeup(chan)` 按 xv6 模式实现，允许在任意自旋锁下阻塞/唤醒。
-  - 时钟中断 (`timer_interrupt_handler`) 会唤醒在 `ticks` 地址上等待的进程，并在 `kerneltrap()` 中触发当前进程 `yield()`。
+  - 时钟中断 (`timer_interrupt_handler`) 会唤醒在 `ticks` 地址上等待的进程，并在 `kerneltrap()` 中调用 `scheduler_tick()` 累积时间片、必要时触发当前进程 `yield()`。
 
 - **内核线程接口**
   - `create_process(name, fn, arg)`：分配 PCB、初始化上下文、设为 `RUNNABLE`。

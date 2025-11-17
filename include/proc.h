@@ -62,6 +62,12 @@ struct proc {
   char name[16];
 
   struct kthread_info kthread;
+
+  int priority;
+  int slice_ticks;
+  int timeslice_expired;
+  struct proc *runq_next;
+  int runq_queued;
 };
 
 extern struct proc proc[];
@@ -86,6 +92,8 @@ int sys_yield(void);
 int sys_kill(int pid);
 int sys_wait(int *status);
 int sys_exit(int status) __attribute__((noreturn));
+
+void scheduler_tick(void);
 
 void push_off(void);
 void pop_off(void);
