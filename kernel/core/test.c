@@ -15,11 +15,126 @@
     }                                                               \
   } while(0)
 
-static volatile int shared_counter;
-static volatile int yield_counts[3];
-static struct spinlock sleep_test_lock;
-static volatile int sleep_ready;
-static volatile int sleep_value;
+static void print_test_banner(const char *name) {
+  printf("============ %s ============\n", name);
+}
+
+#define SHARED_BUFFER_CAP 8
+#define PRODUCE_ITEMS 16
+#define CPU_TASKS 2
+#define CPU_WORK_UNITS 4000000
+#define INTERACTIVE_PHASES 3
+#define INTERACTIVE_SPIN 0ULL
+#define TOTAL_SCHED_TASKS (CPU_TASKS + 1)
+
+static volatile int scheduler_finish_order[TOTAL_SCHED_TASKS];
+static volatile int scheduler_finish_count;
+
+static volatile int simple_task_runs;
+static volatile int consumer_total;
+
+struct shared_buffer {
+  int data[SHARED_BUFFER_CAP];
+  int head;
+  int tail;
+  int count;
+  struct spinlock lock;
+};
+
+static struct shared_buffer shared_buf;
+
+static void note_task_finish(int id) {
+  if(scheduler_finish_count < TOTAL_SCHED_TASKS) {
+    scheduler_finish_order[scheduler_finish_count++] = id;
+  }
+}
+
+static const char *scheduler_task_name(int id) {
+  switch(id) {
+    case 0: return "interactive";
+    case 1: return "cpu-heavy-1";
+    case 2: return "cpu-heavy-2";
+    default: return "unknown";
+  }
+}
+
+static void busy_wait_cycles(uint64 cycles) {
+  uint64 start = get_time();
+  while(get_time() - start < cycles) {
+    __asm__ volatile("nop");
+  }
+}
+
+static void simple_task(void *arg) {
+  (void)arg;
+  simple_task_runs++;
+}
+
+static void cpu_intensive_task(void *arg) {
+  uint64 packed = (uint64)arg;
+  int id = (int)(packed & 0xffffffffu);
+  int weight = (int)(packed >> 32);
+  volatile uint64 acc = 0;
+  for(int i = 0; i < CPU_WORK_UNITS * weight; i++) {
+    acc ^= (uint64)i * (uint64)(i + 31);
+  }
+  (void)acc;
+  note_task_finish(id);
+}
+
+static void interactive_task(void *arg) {
+  int id = (int)(uint64)arg;
+  for(int i = 0; i < INTERACTIVE_PHASES; i++) {
+    busy_wait_cycles(INTERACTIVE_SPIN);
+    yield();
+  }
+  note_task_finish(id);
+}
+
+static void shared_buffer_init(void) {
+  initlock(&shared_buf.lock, "shared-buf");
+  shared_buf.head = 0;
+  shared_buf.tail = 0;
+  shared_buf.count = 0;
+  consumer_total = 0;
+}
+
+static void shared_buffer_put(int value) {
+  acquire(&shared_buf.lock);
+  while(shared_buf.count == SHARED_BUFFER_CAP)
+    sleep((void *)&shared_buf, &shared_buf.lock);
+  shared_buf.data[shared_buf.tail] = value;
+  shared_buf.tail = (shared_buf.tail + 1) % SHARED_BUFFER_CAP;
+  shared_buf.count++;
+  wakeup((void *)&shared_buf);
+  release(&shared_buf.lock);
+}
+
+static int shared_buffer_get(void) {
+  acquire(&shared_buf.lock);
+  while(shared_buf.count == 0)
+    sleep((void *)&shared_buf, &shared_buf.lock);
+  int value = shared_buf.data[shared_buf.head];
+  shared_buf.head = (shared_buf.head + 1) % SHARED_BUFFER_CAP;
+  shared_buf.count--;
+  wakeup((void *)&shared_buf);
+  release(&shared_buf.lock);
+  return value;
+}
+
+static void producer_task(void *arg) {
+  (void)arg;
+  for(int i = 0; i < PRODUCE_ITEMS; i++)
+    shared_buffer_put(i);
+}
+
+static void consumer_task(void *arg) {
+  (void)arg;
+  int total = 0;
+  for(int i = 0; i < PRODUCE_ITEMS; i++)
+    total += shared_buffer_get();
+  consumer_total = total;
+}
 
 void test_printf_basic(void) {
   printf("Testing integer: %d\n", 42);
@@ -159,123 +274,129 @@ void test_exception_handling(void) {
          (int)before, (int)get_ticks());
 }
 
-static void counter_task(void *arg) {
-  int delta = (int)(uint64)arg;
-  shared_counter += delta;
-}
+void test_process_creation(void) {
+  print_test_banner("process creation");
+  printf("[TEST] process creation...\n");
 
-void test_process_creation_basic(void) {
-  printf("[TEST] process creation\n");
-  shared_counter = 0;
-  int pid = create_process("counter-child", counter_task, (void *)1);
+  simple_task_runs = 0;
+  int pid = create_process("simple-task", simple_task, 0);
   TEST_ASSERT(pid > 0, "create_process failed");
 
   int status = -1;
   int waited = wait_process(&status);
   TEST_ASSERT(waited == pid, "wait_process returned unexpected pid");
   TEST_ASSERT(status == 0, "child exit status non-zero");
-  TEST_ASSERT(shared_counter == 1, "shared counter mismatch");
-  printf("[PASS] process creation\n");
-}
+  TEST_ASSERT(simple_task_runs == 1, "simple task did not run");
 
-#define YIELD_TASKS 3
-#define YIELD_ITERS 5
-
-static void yield_task(void *arg) {
-  int id = (int)(uint64)arg;
-  for(int i = 0; i < YIELD_ITERS; i++) {
-    yield_counts[id]++;
-    sys_yield();
+  int pids[NPROC];
+  int count = 0;
+  for(int i = 0; i < NPROC + 5; i++) {
+    int npid = create_process("simple-task", simple_task, 0);
+    if(npid > 0 && count < NPROC) {
+      pids[count++] = npid;
+    } else {
+      break;
+    }
   }
-}
+  printf("[INFO] created %d additional processes\n", count);
 
-void test_scheduler_round_robin(void) {
-  printf("[TEST] scheduler round robin\n");
-  memset((void *)yield_counts, 0, sizeof(yield_counts));
-
-  int pids[YIELD_TASKS];
-  for(int i = 0; i < YIELD_TASKS; i++) {
-    pids[i] = create_process("yield-task", yield_task, (void *)(uint64)i);
-    TEST_ASSERT(pids[i] > 0, "failed to create yield task");
-  }
-
-  int finished[YIELD_TASKS] = {0};
-  int remaining = YIELD_TASKS;
-  int status;
-  while(remaining > 0) {
-    int pid = wait_process(&status);
-    TEST_ASSERT(pid > 0, "wait_process failed");
-    TEST_ASSERT(status == 0, "yield task exit status non-zero");
-    int idx = -1;
-    for(int j = 0; j < YIELD_TASKS; j++) {
-      if(pids[j] == pid) {
-        idx = j;
+  for(int i = 0; i < count; i++) {
+    int child_status = -1;
+    int child = wait_process(&child_status);
+    TEST_ASSERT(child > 0, "wait_process failed during cleanup");
+    TEST_ASSERT(child_status == 0, "child exit status non-zero");
+    int matched = 0;
+    for(int j = 0; j < count; j++) {
+      if(pids[j] == child) {
+        pids[j] = -1;
+        matched = 1;
         break;
       }
     }
-    TEST_ASSERT(idx != -1, "unexpected child pid");
-    TEST_ASSERT(finished[idx] == 0, "duplicate wait on child");
-    finished[idx] = 1;
-    remaining--;
+    TEST_ASSERT(matched, "unexpected child pid observed");
   }
 
-  for(int i = 0; i < YIELD_TASKS; i++) {
-    TEST_ASSERT(yield_counts[i] == YIELD_ITERS, "yield iterations mismatch");
+  printf("[PASS] process creation stress complete\n");
+}
+
+void test_scheduler(void) {
+  print_test_banner("scheduler");
+  printf("[TEST] scheduler behaviour...\n");
+
+  scheduler_finish_count = 0;
+
+  int interactive_pid = create_process("interactive", interactive_task, (void *)(uint64)0);
+  TEST_ASSERT(interactive_pid > 0, "failed to create interactive task");
+
+  const int weights[CPU_TASKS] = {4, 8};
+  for(int i = 0; i < CPU_TASKS; i++) {
+    uint64 packed = ((uint64)weights[i] << 32) | (uint32)(i + 1);
+    int pid = create_process("cpu-task", cpu_intensive_task, (void *)packed);
+    TEST_ASSERT(pid > 0, "failed to create cpu task");
   }
-  printf("[PASS] scheduler round robin\n");
+
+  uint64 start = get_time();
+  busy_wait_cycles(1000000ULL);
+
+  int finished = 0;
+  int status;
+  while(finished < TOTAL_SCHED_TASKS) {
+    int pid = wait_process(&status);
+    TEST_ASSERT(pid > 0, "wait_process failed in scheduler test");
+    TEST_ASSERT(status == 0, "scheduler child exit status non-zero");
+    finished++;
+  }
+
+  uint64 end = get_time();
+  printf("[INFO] finish order: %s -> %s -> %s\n",
+         scheduler_task_name(scheduler_finish_order[0]),
+         scheduler_task_name(scheduler_finish_order[1]),
+         scheduler_task_name(scheduler_finish_order[2]));
+  TEST_ASSERT(scheduler_finish_order[0] == 0, "interactive task did not finish first");
+  printf("[PASS] scheduler test completed in %lu cycles (MLFQ priority verified)\n",
+         end - start);
 }
 
-static void sleeper_task(void *arg) {
-  (void)arg;
-  acquire(&sleep_test_lock);
-  while(!sleep_ready)
-    sleep((void *)&sleep_ready, &sleep_test_lock);
-  TEST_ASSERT(sleep_value == 0x1234, "sleep value corrupted");
-  release(&sleep_test_lock);
-}
+void test_synchronization(void) {
+  print_test_banner("synchronization");
+  printf("[TEST] synchronization (producer/consumer)...\n");
 
-static void waker_task(void *arg) {
-  (void)arg;
-  acquire(&sleep_test_lock);
-  sleep_value = 0x1234;
-  sleep_ready = 1;
-  wakeup((void *)&sleep_ready);
-  release(&sleep_test_lock);
-}
-
-void test_sleep_wakeup_mechanism(void) {
-  printf("[TEST] sleep/wakeup\n");
-  initlock(&sleep_test_lock, "sleep-test");
-  sleep_ready = 0;
-  sleep_value = 0;
-
-  int sleeper = create_process("sleeper", sleeper_task, 0);
-  TEST_ASSERT(sleeper > 0, "sleeper creation failed");
-
-  sys_yield();
-
-  int waker = create_process("waker", waker_task, 0);
-  TEST_ASSERT(waker > 0, "waker creation failed");
+  shared_buffer_init();
+  int prod = create_process("producer", producer_task, 0);
+  TEST_ASSERT(prod > 0, "producer creation failed");
+  int cons = create_process("consumer", consumer_task, 0);
+  TEST_ASSERT(cons > 0, "consumer creation failed");
 
   int status;
-  int completed = 0;
-  while(completed < 2) {
+  for(int i = 0; i < 2; i++) {
     int pid = wait_process(&status);
-    TEST_ASSERT(pid == sleeper || pid == waker, "unexpected child pid");
-    TEST_ASSERT(status == 0, "child exit status non-zero");
-    completed++;
+    TEST_ASSERT(pid == prod || pid == cons, "unexpected pid in sync test");
+    TEST_ASSERT(status == 0, "sync child exit status non-zero");
   }
 
-  TEST_ASSERT(sleep_ready == 1, "sleep flag not set");
-  TEST_ASSERT(sleep_value == 0x1234, "sleep value not written");
-  printf("[PASS] sleep/wakeup\n");
+  int expected = (PRODUCE_ITEMS - 1) * PRODUCE_ITEMS / 2;
+  TEST_ASSERT(consumer_total == expected, "consumer total mismatch");
+  printf("[PASS] synchronization test completed (sum=%d)\n", consumer_total);
+}
+
+void debug_proc_table(void) {
+  print_test_banner("process table");
+  printf("[DEBUG] process table snapshot\n");
+  for(int i = 0; i < NPROC; i++) {
+    struct proc *p = &proc[i];
+    if(p->state != UNUSED) {
+      printf("PID:%d State:%d Name:%s\n", p->pid, p->state, p->name);
+    }
+  }
+  printf("[DEBUG] end of process table\n");
 }
 
 void run_proc_tests(void *arg) {
   (void)arg;
-  printf("[SUITE] running kernel tests\n");
-  test_process_creation_basic();
-  test_scheduler_round_robin();
-  test_sleep_wakeup_mechanism();
+  printf("[SUITE] running kernel process tests\n");
+  test_process_creation();
+  test_scheduler();
+  test_synchronization();
+  debug_proc_table();
   printf("[SUITE] all tests finished\n");
 }

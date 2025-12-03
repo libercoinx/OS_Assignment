@@ -54,16 +54,17 @@ kernel/
 入口进程 (`main.c`) 在完成 UART、内存、页表、陷阱初始化后：
 
 1. 调用 `procinit()` 完成进程表初始化；
-2. 创建单个测试内核线程 `run_all_tests`；
+2. 创建单个测试内核线程 `run_proc_tests`；
 3. 进入 `scheduler()`，后续流程完全由调度器驱动。
 
-`kernel/core/test.c` 的 `run_all_tests` 会顺序执行：
+`kernel/core/test.c` 的 `run_proc_tests` 会顺序执行：
 
 - 既有内存/页表/中断/异常测试；
 - 新增测试：
-  - `test_process_creation_basic`：验证进程创建和等待；
-  - `test_scheduler_round_robin`：多个进程循环 `sys_yield`，检查调度公平性；
-  - `test_sleep_wakeup_mechanism`：构造 `sleep/wakeup` 同步，确认唤醒与状态标记。
+  - `test_process_creation`：创建大量内核线程并回收，覆盖进程表耗尽场景；
+  - `test_scheduler`：启动多个计算任务，观察调度切换并统计耗时；
+  - `test_synchronization`：使用生产者/消费者模型验证 `sleep/wakeup` 的同步正确性；
+  - `debug_proc_table`：打印当前进程表状态，便于调试残留 PCB。
 
 运行方式：
 

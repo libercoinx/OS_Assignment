@@ -34,4 +34,8 @@ void test_virtual_memory(void);
 void test_timer_interrupt(void);
 void test_interrupt_overhead(void);
 void test_exception_handling(void);
+void test_process_creation(void);
+void test_scheduler(void);
+void test_synchronization(void);
+void debug_proc_table(void);
 void run_proc_tests(void *arg);
