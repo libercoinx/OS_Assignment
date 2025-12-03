@@ -9,6 +9,8 @@
 
 static interrupt_handler_t irq_table[IRQ_MAX];
 static volatile uint64 ticks;
+static struct exception_info last_exception;
+static int last_exception_valid;
 
 static void timer_interrupt_handler(void);
 static void set_next_timer_tick(void);
@@ -16,6 +18,7 @@ static void handle_syscall(struct trapframe *tf);
 static void handle_instruction_page_fault(struct trapframe *tf);
 static void handle_load_page_fault(struct trapframe *tf);
 static void handle_store_page_fault(struct trapframe *tf);
+static void record_exception(const struct trapframe *tf);
 
 static inline void advance_sepc(struct trapframe *tf) {
   uint16 insn = *(volatile const uint16 *)(tf->sepc);
@@ -143,6 +146,7 @@ static void timer_interrupt_handler(void) {
 }
 
 void handle_exception(struct trapframe *tf) {
+  record_exception(tf);
   switch (tf->scause) {
     case 8: /* Environment call from U-mode */
     case 9: /* Environment call from S-mode */
@@ -188,4 +192,23 @@ static void handle_load_page_fault(struct trapframe *tf) {
 static void handle_store_page_fault(struct trapframe *tf) {
   printf("Store fault at 0x%x\n", (int)(tf->stval));
   advance_sepc(tf);
+}
+
+static void record_exception(const struct trapframe *tf) {
+  last_exception.scause = tf->scause;
+  last_exception.stval = tf->stval;
+  last_exception.sepc = tf->sepc;
+  last_exception_valid = 1;
+}
+
+int trap_fetch_last_exception(struct exception_info *info) {
+  if(info == 0 || !last_exception_valid)
+    return 0;
+  *info = last_exception;
+  return 1;
+}
+
+void trap_clear_last_exception(void) {
+  memset(&last_exception, 0, sizeof(last_exception));
+  last_exception_valid = 0;
 }

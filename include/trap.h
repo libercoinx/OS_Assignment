@@ -18,6 +18,12 @@ struct trapframe {
   uint64 stval;
 };
 
+struct exception_info {
+  uint64 scause;
+  uint64 stval;
+  uint64 sepc;
+};
+
 void trap_init(void);
 void timer_init(void);
 void register_interrupt(int irq, interrupt_handler_t handler);
@@ -28,4 +34,5 @@ void intr_off(void);
 uint64 get_time(void);
 uint64 get_ticks(void);
 void handle_exception(struct trapframe *tf);
-
+int trap_fetch_last_exception(struct exception_info *info);
+void trap_clear_last_exception(void);
