@@ -19,8 +19,10 @@ C_SRCS := \
   fs/log.c \
   fs/fs.c \
   fs/file.c \
+  fs/sysfile.c \
   proc/proc.c \
   proc/sysproc.c \
+  proc/syscall.c \
   lib/printf.c \
   lib/string.c \
   mm/kalloc.c \

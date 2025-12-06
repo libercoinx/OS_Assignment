@@ -135,6 +135,7 @@ extern char trampoline[]; /* 跳板代码地址 */
 #define VIRTIO0 0x10008000L
 #define PLIC 0x0c000000L
 #define TRAMPOLINE (MAXVA - PGSIZE)
+#define TRAPFRAME (TRAMPOLINE - PGSIZE)
 
 /* 最大虚拟地址 */
 #define MAXVA (1L << (9 + 9 + 9 + 12 - 1))

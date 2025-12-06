@@ -1,6 +1,7 @@
 #pragma once
 
 #include "riscv.h"
+#include "stat.h"
 
 #define BSIZE      1024            /* block size in bytes */
 #define FSSIZE     1024            /* total blocks in ramdisk */
@@ -135,6 +136,7 @@ struct file* filedup(struct file *f);
 void fileclose(struct file *f);
 int fileread(struct file *f, char *addr, int n);
 int filewrite(struct file *f, char *addr, int n);
+int filestat(struct file *f, struct stat *st);
 
 struct fs_usage_stats {
   uint total_blocks;
@@ -174,3 +176,6 @@ int readi(struct inode *ip, uint64 dst, uint off, uint n);
 int writei(struct inode *ip, uint64 src, uint off, uint n);
 int dirlink(struct inode *dp, const char *name, uint inum);
 int dirlookup(struct inode *dp, const char *name, uint *poff);
+struct inode* nameiparent(char *path, char *name);
+struct inode* create(const char *path, short type, short major, short minor);
+void stati(struct inode *ip, struct stat *st);

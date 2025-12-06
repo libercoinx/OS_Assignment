@@ -12,7 +12,7 @@ static struct inode* iget(uint dev, uint inum);
 static uint bmap(struct inode *ip, uint bn);
 static uint balloc(uint dev);
 static void bfree(int dev, uint b);
-static struct inode* create(const char *path, short type, short major, short minor);
+struct inode* create(const char *path, short type, short major, short minor);
 static void fs_format(void);
 static void bzero(int dev, int bno);
 static void log_persist(struct buf *bp);
@@ -483,12 +483,12 @@ namei(char *path) {
   return namex(path, 0, namebuf);
 }
 
-static struct inode*
+struct inode*
 nameiparent(char *path, char *name) {
   return namex(path, 1, name);
 }
 
-static struct inode*
+struct inode*
 create(const char *path, short type, short major, short minor) {
   char name[DIRSIZ];
   char buf[128];
@@ -699,6 +699,15 @@ fs_collect_inode_usage(struct fs_inode_usage *entries, int max_entries) {
   }
   release(&icache.lock);
   return count;
+}
+
+void
+stati(struct inode *ip, struct stat *st) {
+  st->dev = ip->dev;
+  st->ino = ip->inum;
+  st->type = ip->type;
+  st->nlink = ip->nlink;
+  st->size = ip->size;
 }
 #ifndef MIN
 #define MIN(a,b) ((a) < (b) ? (a) : (b))

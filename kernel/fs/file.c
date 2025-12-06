@@ -101,3 +101,14 @@ filewrite(struct file *f, char *addr, int n) {
   }
   return -1;
 }
+
+int
+filestat(struct file *f, struct stat *st) {
+  if(f->type == FD_INODE) {
+    ilock(f->ip);
+    stati(f->ip, st);
+    iunlock(f->ip);
+    return 0;
+  }
+  return -1;
+}

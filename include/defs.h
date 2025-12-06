@@ -1,3 +1,5 @@
+#include "riscv.h"
+
 #pragma once
 
 // console.c
@@ -17,17 +19,24 @@ void printfint(int x);
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #endif
 
+// syscall.c helpers
+int argint(int n, int *ip);
+int argaddr(int n, uint64 *ip);
+int argstr(int n, char *buf, int max);
+
 // proc.c
 void procinit(void);
 int create_process(const char *name, void (*fn)(void *), void *arg);
 void exit_process(int status);
 int wait_process(int *status);
 void scheduler(void) __attribute__((noreturn));
-int sys_getpid(void);
-int sys_yield(void);
-int sys_kill(int pid);
-int sys_wait(int *status);
-int sys_exit(int status);
+uint64 sys_getpid(void);
+uint64 sys_yield(void);
+uint64 sys_kill(void);
+uint64 sys_wait(void);
+uint64 sys_exit(void) __attribute__((noreturn));
+uint64 sys_sleep(void);
+uint64 sys_uptime(void);
 
 // test.c
 void test_printf_basic();
@@ -43,7 +52,7 @@ void test_filesystem_integrity(void);
 void test_concurrent_access(void);
 void test_crash_recovery(void);
 void test_filesystem_performance(void);
-void run_fs_tests(void* arg);
+void run_syscall_tests(void* arg);
 
 // fs.c
 void fs_init(void);

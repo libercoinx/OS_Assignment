@@ -5,6 +5,7 @@
 #include "string.h"
 #include "vm.h"
 #include "trap.h"
+#include "fs.h"
 
 #define KSTACK_SIZE PGSIZE
 
@@ -99,6 +100,9 @@ freeproc(struct proc *p) {
   p->xstate = 0;
   p->pid = 0;
   p->parent = 0;
+  for(int i = 0; i < NOFILE; i++)
+    p->ofile[i] = 0;
+  p->cwd = 0;
   p->name[0] = '\0';
   p->state = UNUSED;
   p->kthread.start = 0;
@@ -141,6 +145,10 @@ alloc_process(void) {
       memset(&p->context, 0, sizeof(p->context));
       p->context.sp = p->kstack + KSTACK_SIZE;
       p->context.ra = (uint64)proc_entry;
+      for(int i = 0; i < NOFILE; i++)
+        p->ofile[i] = 0;
+      char root[] = "/";
+      p->cwd = namei(root);
       return p;
     }
     release(&p->lock);
@@ -190,6 +198,17 @@ exit_process(int status) {
   struct proc *p = myproc();
   if(p == 0)
     panic("exit_process");
+
+  for(int fd = 0; fd < NOFILE; fd++) {
+    if(p->ofile[fd]) {
+      fileclose(p->ofile[fd]);
+      p->ofile[fd] = 0;
+    }
+  }
+  if(p->cwd) {
+    iput(p->cwd);
+    p->cwd = 0;
+  }
 
   acquire(&wait_lock);
   acquire(&p->lock);

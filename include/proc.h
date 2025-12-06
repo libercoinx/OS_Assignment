@@ -2,8 +2,12 @@
 
 #include "riscv.h"
 
+struct file;
+struct inode;
+
 #define NPROC 32
 #define NCPU  1
+#define NOFILE 16
 
 enum procstate {
   UNUSED = 0,
@@ -60,6 +64,8 @@ struct proc {
   struct context context;
   struct proc *parent;
   char name[16];
+  struct file *ofile[NOFILE];
+  struct inode *cwd;
 
   struct kthread_info kthread;
 };
@@ -81,11 +87,13 @@ int create_process(const char *name, void (*fn)(void *), void *arg);
 void exit_process(int status) __attribute__((noreturn));
 int wait_process(int *status);
 
-int sys_getpid(void);
-int sys_yield(void);
-int sys_kill(int pid);
-int sys_wait(int *status);
-int sys_exit(int status) __attribute__((noreturn));
+uint64 sys_getpid(void);
+uint64 sys_yield(void);
+uint64 sys_kill(void);
+uint64 sys_wait(void);
+uint64 sys_exit(void) __attribute__((noreturn));
+uint64 sys_sleep(void);
+uint64 sys_uptime(void);
 
 void push_off(void);
 void pop_off(void);

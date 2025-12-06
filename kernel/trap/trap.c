@@ -13,18 +13,13 @@ static volatile uint64 ticks;
 
 static void timer_interrupt_handler(void);
 static void set_next_timer_tick(void);
-static void handle_syscall(struct trapframe *tf);
 static void handle_instruction_page_fault(struct trapframe *tf);
 static void handle_load_page_fault(struct trapframe *tf);
 static void handle_store_page_fault(struct trapframe *tf);
+extern void syscall(struct trapframe *tf, struct pushregs *regs);
 
 static inline void advance_sepc(struct trapframe *tf) {
-  uint16 insn = *(volatile const uint16 *)(tf->sepc);
-  if((insn & INST_16_MASK) != INST_16_MASK) {
-    tf->sepc += 2;
-  } else {
-    tf->sepc += 4;
-  }
+  tf->epc += 4;
 }
 
 extern void kernelvec(void);
@@ -96,6 +91,10 @@ uint64 get_ticks(void) {
   return ticks;
 }
 
+void *ticks_addr(void) {
+  return (void *)&ticks;
+}
+
 static void dispatch_interrupt(int irq) {
   if(irq >= 0 && irq < IRQ_MAX && irq_table[irq]) {
     irq_table[irq]();
@@ -104,7 +103,7 @@ static void dispatch_interrupt(int irq) {
   }
 }
 
-void kerneltrap(void) {
+void kerneltrap(struct pushregs *regs) {
   uint64 scause = r_scause();
   uint64 sepc = r_sepc();
   uint64 sstatus = r_sstatus();
@@ -122,14 +121,14 @@ void kerneltrap(void) {
     }
   } else {
     struct trapframe tf = {
-      .sepc = sepc,
-      .sstatus = sstatus,
-      .scause = scause,
-      .stval = r_stval()
+      .epc = sepc,
+      .status = sstatus,
+      .cause = scause,
+      .tval = r_stval()
     };
-    handle_exception(&tf);
-    sepc = tf.sepc;
-    sstatus = tf.sstatus;
+    handle_exception(&tf, regs);
+    sepc = tf.epc;
+    sstatus = tf.status;
   }
 
   sstatus |= SSTATUS_SIE;
@@ -149,14 +148,14 @@ static void timer_interrupt_handler(void) {
   w_sip(r_sip() & ~SIP_STIP);
 }
 
-void handle_exception(struct trapframe *tf) {
-  switch (tf->scause) {
+void handle_exception(struct trapframe *tf, struct pushregs *regs) {
+  switch (tf->cause) {
     case 8: /* Environment call from U-mode */
     case 9: /* Environment call from S-mode */
-      handle_syscall(tf);
+      handle_syscall(tf, regs);
       break;
     case 2: /* Illegal instruction */
-      printf("Illegal instruction at 0x%x\n", (int)(tf->sepc));
+      printf("Illegal instruction at 0x%x\n", (int)(tf->epc));
       advance_sepc(tf);
       break;
     case 12: /* Instruction page fault */
@@ -172,27 +171,27 @@ void handle_exception(struct trapframe *tf) {
       break;
     default:
       printf("Unhandled exception: scause=%d stval=0x%x sepc=0x%x\n",
-             tf->scause, (int)(tf->stval), (int)(tf->sepc));
+             (int)tf->cause, (int)(tf->tval), (int)(tf->epc));
       panic("handle_exception");
   }
 }
 
-static void handle_syscall(struct trapframe *tf) {
-  printf("System call invoked (not implemented)\n");
+void handle_syscall(struct trapframe *tf, struct pushregs *regs) {
+  syscall(tf, regs);
   advance_sepc(tf);
 }
 
 static void handle_instruction_page_fault(struct trapframe *tf) {
-  printf("Instruction page fault at 0x%x\n", (int)(tf->stval));
+  printf("Instruction page fault at 0x%x\n", (int)(tf->tval));
   advance_sepc(tf);
 }
 
 static void handle_load_page_fault(struct trapframe *tf) {
-  printf("Load fault at 0x%x\n", (int)(tf->stval));
+  printf("Load fault at 0x%x\n", (int)(tf->tval));
   advance_sepc(tf);
 }
 
 static void handle_store_page_fault(struct trapframe *tf) {
-  printf("Store fault at 0x%x\n", (int)(tf->stval));
+  printf("Store fault at 0x%x\n", (int)(tf->tval));
   advance_sepc(tf);
 }

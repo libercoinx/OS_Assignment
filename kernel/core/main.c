@@ -18,7 +18,7 @@ void main(void) {
   procinit();
   timer_init();
   intr_on();
-  if(create_process("fs-tests", run_fs_tests, 0) < 0)
+  if(create_process("fs-tests", run_syscall_tests, 0) < 0)
     panic("create_process");
   scheduler();  // 不会返回
 }

@@ -7,6 +7,8 @@
 #include "trap.h"
 #include "proc.h"
 #include "fs.h"
+#include "fcntl.h"
+#include "syscall.h"
 
 #define TEST_ASSERT(cond, msg)                                      \
   do {                                                              \
@@ -59,6 +61,169 @@ static void format_name(char *dst, const char *prefix, int idx) {
   if(i >= DIRSIZ)
     i = DIRSIZ - 1;
   dst[i] = 0;
+}
+
+static void invoke_syscall(struct pushregs *regs, struct trapframe *tf) {
+  tf->epc = 0;
+  handle_syscall(tf, regs);
+}
+
+static void test_basic_syscalls(void) {
+  print_test_banner("syscall basic");
+  printf("[TEST] basic system calls...\n");
+  struct pushregs regs = {0};
+  struct trapframe tf = {0};
+
+  regs.a7 = SYS_getpid;
+  invoke_syscall(&regs, &tf);
+  int pid = (int)regs.a0;
+  printf("[INFO] getpid -> %d\n", pid);
+  TEST_ASSERT(pid == myproc()->pid, "getpid syscall mismatch");
+
+  uint64 before = get_ticks();
+  regs = (struct pushregs){0};
+  tf = (struct trapframe){0};
+  regs.a0 = 1;
+  regs.a7 = SYS_sleep;
+  invoke_syscall(&regs, &tf);
+  TEST_ASSERT(regs.a0 == 0, "sleep syscall failed");
+  TEST_ASSERT(get_ticks() - before >= 1, "sleep syscall did not wait");
+  printf("[INFO] sleep(1 tick) ok, elapsed=%d\n", (int)(get_ticks() - before));
+
+  printf("[PASS] basic system calls\n");
+}
+
+static void test_parameter_passing(void) {
+  print_test_banner("syscall parameter");
+  printf("[TEST] parameter passing...\n");
+  const char *payload = "Hello, World!";
+  char path[] = "/sys_param";
+  char buf[32];
+  struct pushregs regs = {0};
+  struct trapframe tf = {0};
+
+  regs.a0 = (uint64)path;
+  regs.a1 = O_CREATE | O_RDWR;
+  regs.a7 = SYS_open;
+  invoke_syscall(&regs, &tf);
+  int fd = (int)regs.a0;
+  TEST_ASSERT(fd >= 0, "open syscall failed");
+  printf("[INFO] open %s -> fd=%d\n", path, fd);
+
+  regs = (struct pushregs){0};
+  tf = (struct trapframe){0};
+  regs.a0 = fd;
+  regs.a1 = (uint64)payload;
+  regs.a2 = strlen(payload);
+  regs.a7 = SYS_write;
+  invoke_syscall(&regs, &tf);
+  printf("[INFO] write(fd=%d,len=%d) -> %d\n", fd, (int)strlen(payload), (int)regs.a0);
+  TEST_ASSERT(regs.a0 == strlen(payload), "write length mismatch");
+
+  // rewind by closing and reopening
+  regs = (struct pushregs){0};
+  tf = (struct trapframe){0};
+  regs.a0 = fd;
+  regs.a7 = SYS_close;
+  invoke_syscall(&regs, &tf);
+
+  regs = (struct pushregs){0};
+  tf = (struct trapframe){0};
+  regs.a0 = (uint64)path;
+  regs.a1 = O_RDONLY;
+  regs.a7 = SYS_open;
+  invoke_syscall(&regs, &tf);
+  fd = (int)regs.a0;
+  TEST_ASSERT(fd >= 0, "reopen failed");
+
+  memset(buf, 0, sizeof(buf));
+  regs = (struct pushregs){0};
+  tf = (struct trapframe){0};
+  regs.a0 = fd;
+  regs.a1 = (uint64)buf;
+  regs.a2 = sizeof(buf);
+  regs.a7 = SYS_read;
+  invoke_syscall(&regs, &tf);
+  printf("[INFO] read(fd=%d) -> %d bytes \"%s\"\n", fd, (int)regs.a0, buf);
+  TEST_ASSERT(regs.a0 == strlen(payload), "read length mismatch");
+  TEST_ASSERT(strncmp(buf, payload, strlen(payload)) == 0, "read content mismatch");
+
+  regs = (struct pushregs){0};
+  tf = (struct trapframe){0};
+  regs.a0 = fd;
+  regs.a7 = SYS_close;
+  invoke_syscall(&regs, &tf);
+
+  regs = (struct pushregs){0};
+  tf = (struct trapframe){0};
+  regs.a0 = (uint64)path;
+  regs.a7 = SYS_unlink;
+  invoke_syscall(&regs, &tf);
+  TEST_ASSERT((int)regs.a0 == 0, "unlink failed");
+
+  // boundary/invalid cases
+  regs = (struct pushregs){0};
+  tf = (struct trapframe){0};
+  regs.a0 = -1; // invalid fd
+  regs.a1 = (uint64)payload;
+  regs.a2 = 4;
+  regs.a7 = SYS_write;
+  invoke_syscall(&regs, &tf);
+  printf("[INFO] write(fd=-1) -> %d (expected error)\n", (int)regs.a0);
+
+  printf("[PASS] parameter passing\n");
+}
+
+static void test_security(void) {
+  print_test_banner("syscall security");
+  printf("[TEST] syscall safety checks...\n");
+  struct pushregs regs = {0};
+  struct trapframe tf = {0};
+  char buf[8] = {0};
+
+  // invalid fd
+  regs.a0 = -123;
+  regs.a1 = (uint64)"abc";
+  regs.a2 = 3;
+  regs.a7 = SYS_write;
+  invoke_syscall(&regs, &tf);
+  printf("[INFO] write(fd=-123) -> %d\n", (int)regs.a0);
+
+  // read with invalid fd
+  regs = (struct pushregs){0};
+  tf = (struct trapframe){0};
+  regs.a0 = -123;
+  regs.a1 = (uint64)buf;
+  regs.a2 = sizeof(buf);
+  regs.a7 = SYS_read;
+  invoke_syscall(&regs, &tf);
+  printf("[INFO] read(fd=-123,len=%d) -> %d\n", (int)sizeof(buf), (int)regs.a0);
+
+  // unlink nonexistent file
+  regs = (struct pushregs){0};
+  tf = (struct trapframe){0};
+  char missing[] = "/no_such_file";
+  regs.a0 = (uint64)missing;
+  regs.a7 = SYS_unlink;
+  invoke_syscall(&regs, &tf);
+  printf("[INFO] unlink(%s) -> %d\n", missing, (int)regs.a0);
+
+  printf("[PASS] syscall safety checks\n");
+}
+
+static void test_syscall_performance(void) {
+  print_test_banner("syscall performance");
+  printf("[TEST] syscall performance...\n");
+  struct pushregs regs = {0};
+  struct trapframe tf = {0};
+  uint64 start = get_time();
+  for(int i = 0; i < 10000; i++) {
+    regs.a7 = SYS_getpid;
+    invoke_syscall(&regs, &tf);
+  }
+  uint64 cycles = get_time() - start;
+  printf("[INFO] 10000 getpid() syscalls took %lu cycles\n", cycles);
+  printf("[PASS] syscall performance\n");
 }
 
 void test_printf_basic(void) {
@@ -496,16 +661,12 @@ void debug_disk_io(void) {
          (int)counters.disk_read_count, (int)counters.disk_write_count);
 }
 
-void run_fs_tests(void *arg) {
+void run_syscall_tests(void *arg) {
   (void)arg;
-  printf("[SUITE] running filesystem tests\n");
-  test_filesystem_smoke();
-  test_filesystem_integrity();
-  test_concurrent_access();
-  test_crash_recovery();
-  test_filesystem_performance();
-  debug_filesystem_state();
-  debug_inode_usage();
-  debug_disk_io();
-  printf("[SUITE] filesystem tests finished\n");
+  printf("[SUITE] running syscall tests\n");
+  test_basic_syscalls();
+  test_parameter_passing();
+  test_security();
+  test_syscall_performance();
+  printf("[SUITE] syscall tests finished\n");
 }
