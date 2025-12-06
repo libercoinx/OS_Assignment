@@ -63,9 +63,9 @@ struct proc {
 
   struct kthread_info kthread;
 
-  int priority;
-  int slice_ticks;
-  int timeslice_expired;
+  int priority;          /* 0 is highest */
+  int slice_ticks;       /* ticks used in current quantum */
+  int timeslice_expired; /* set when quantum consumed */
   struct proc *runq_next;
   int runq_queued;
 };
