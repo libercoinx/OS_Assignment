@@ -26,9 +26,15 @@ static void print_test_banner(const char *name) {
 #define INTERACTIVE_PHASES 3
 #define INTERACTIVE_SPIN 0ULL
 #define TOTAL_SCHED_TASKS (CPU_TASKS + 1)
+#define PRIO_TEST_TASKS 3
+#define PRIO_HIGH 0
+#define PRIO_MED 2
+#define PRIO_LOW 4
 
 static volatile int scheduler_finish_order[TOTAL_SCHED_TASKS];
 static volatile int scheduler_finish_count;
+static volatile int prio_finish_order[PRIO_TEST_TASKS];
+static volatile int prio_finish_count;
 
 static volatile int simple_task_runs;
 static volatile int consumer_total;
@@ -63,6 +69,23 @@ static void busy_wait_cycles(uint64 cycles) {
   while(get_time() - start < cycles) {
     __asm__ volatile("nop");
   }
+}
+
+struct prio_task_cfg {
+  int id;
+  int work_iters;
+};
+
+static void prio_task(void *arg) {
+  struct prio_task_cfg *cfg = (struct prio_task_cfg *)arg;
+  for(int i = 0; i < cfg->work_iters; i++) {
+    for(volatile int spin = 0; spin < 1000; spin++)
+      ;
+    sys_yield();
+  }
+  int idx = __sync_fetch_and_add(&prio_finish_count, 1);
+  if(idx < PRIO_TEST_TASKS)
+    prio_finish_order[idx] = cfg->id;
 }
 
 static void simple_task(void *arg) {
@@ -325,15 +348,15 @@ void test_scheduler(void) {
 
   scheduler_finish_count = 0;
 
-  int interactive_pid = create_process("interactive", interactive_task, (void *)(uint64)0);
-  TEST_ASSERT(interactive_pid > 0, "failed to create interactive task");
-
   const int weights[CPU_TASKS] = {4, 8};
   for(int i = 0; i < CPU_TASKS; i++) {
     uint64 packed = ((uint64)weights[i] << 32) | (uint32)(i + 1);
     int pid = create_process("cpu-task", cpu_intensive_task, (void *)packed);
     TEST_ASSERT(pid > 0, "failed to create cpu task");
   }
+
+  int interactive_pid = create_process("interactive", interactive_task, (void *)(uint64)0);
+  TEST_ASSERT(interactive_pid > 0, "failed to create interactive task");
 
   uint64 start = get_time();
   busy_wait_cycles(1000000ULL);
@@ -355,6 +378,91 @@ void test_scheduler(void) {
   TEST_ASSERT(scheduler_finish_order[0] == 0, "interactive task did not finish first");
   printf("[PASS] scheduler test completed in %lu cycles (MLFQ priority verified)\n",
          end - start);
+}
+
+static void reset_prio_results(void) {
+  prio_finish_count = 0;
+  for(int i = 0; i < PRIO_TEST_TASKS; i++)
+    prio_finish_order[i] = -1;
+}
+
+void test_scheduler_priority_gap(void) {
+  print_test_banner("scheduler priority T1");
+  printf("[TEST] priority gap: high vs low...\n");
+  reset_prio_results();
+  struct prio_task_cfg cfg_low  = { .id = 1, .work_iters = 80 };
+  struct prio_task_cfg cfg_high = { .id = 2, .work_iters = 50 };
+  int pid_low  = create_process_prio("prio-low", prio_task, &cfg_low, PRIO_LOW);
+  int pid_high = create_process_prio("prio-high", prio_task, &cfg_high, PRIO_HIGH);
+  TEST_ASSERT(pid_high > 0 && pid_low > 0, "priority test spawn failed");
+  printf("[INFO] spawned low-prio pid=%d (q%d, %d iters) BEFORE high-prio pid=%d (q0, %d iters)\n",
+         pid_low, PRIO_LOW, cfg_low.work_iters, pid_high, cfg_high.work_iters);
+  int status;
+  int done = 0;
+  while(done < 2) {
+    int pid = wait_process(&status);
+    TEST_ASSERT(pid == pid_high || pid == pid_low, "unexpected pid in priority gap");
+    TEST_ASSERT(status == 0, "priority task exit status");
+    done++;
+  }
+  TEST_ASSERT(prio_finish_order[0] == cfg_high.id, "high priority task did not finish first");
+  printf("[INFO] finish order=%d,%d (MLFQ honored higher queue first)\n",
+         prio_finish_order[0], prio_finish_order[1]);
+  printf("[PASS] high priority finished before low priority\n");
+}
+
+void test_scheduler_same_priority(void) {
+  print_test_banner("scheduler priority T2");
+  printf("[TEST] equal priority fairness...\n");
+  reset_prio_results();
+  struct prio_task_cfg cfg_a = { .id = 1, .work_iters = 40 };
+  struct prio_task_cfg cfg_b = { .id = 2, .work_iters = 40 };
+  int pid_a = create_process_prio("prio-eq-a", prio_task, &cfg_a, PRIO_MED);
+  int pid_b = create_process_prio("prio-eq-b", prio_task, &cfg_b, PRIO_MED);
+  TEST_ASSERT(pid_a > 0 && pid_b > 0, "equal priority spawn failed");
+  printf("[INFO] spawned two tasks in queue %d (time slice=%d)\n",
+         PRIO_MED, mlfq_quanta[PRIO_MED]);
+  int status;
+  int done = 0;
+  while(done < 2) {
+    int pid = wait_process(&status);
+    TEST_ASSERT(pid == pid_a || pid == pid_b, "unexpected pid in equal priority");
+    TEST_ASSERT(status == 0, "equal priority exit status");
+    done++;
+  }
+  TEST_ASSERT(prio_finish_count == 2, "not all equal priority tasks finished");
+  printf("[INFO] finish order=%d,%d (round-robin within same queue)\n",
+         prio_finish_order[0], prio_finish_order[1]);
+  printf("[PASS] equal priority tasks completed\n");
+}
+
+void test_scheduler_mixed_priority(void) {
+  print_test_banner("scheduler priority T3");
+  printf("[TEST] mixed priority with aging...\n");
+  reset_prio_results();
+  struct prio_task_cfg cfg_hi = { .id = 3, .work_iters = 60 };
+  struct prio_task_cfg cfg_mid = { .id = 2, .work_iters = 80 };
+  struct prio_task_cfg cfg_lo = { .id = 1, .work_iters = 120 };
+  int pid_lo = create_process_prio("mix-lo", prio_task, &cfg_lo, PRIO_LOW);
+  int pid_mid = create_process_prio("mix-mid", prio_task, &cfg_mid, PRIO_MED);
+  int pid_hi = create_process_prio("mix-hi", prio_task, &cfg_hi, PRIO_HIGH);
+  TEST_ASSERT(pid_hi > 0 && pid_mid > 0 && pid_lo > 0, "mixed priority spawn failed");
+  printf("[INFO] spawned order: low pid=%d(q%d) -> mid pid=%d(q%d) -> hi pid=%d(q%d) with quanta %d/%d/%d\n",
+         pid_lo, PRIO_LOW, pid_mid, PRIO_MED, pid_hi, PRIO_HIGH,
+         mlfq_quanta[PRIO_LOW], mlfq_quanta[PRIO_MED], mlfq_quanta[PRIO_HIGH]);
+  int status;
+  int done = 0;
+  while(done < 3) {
+    int pid = wait_process(&status);
+    TEST_ASSERT(pid == pid_hi || pid == pid_mid || pid == pid_lo, "unexpected pid in mixed priority");
+    TEST_ASSERT(status == 0, "mixed priority exit status");
+    done++;
+  }
+  TEST_ASSERT(prio_finish_count == 3, "not all mixed priority tasks finished");
+  TEST_ASSERT(prio_finish_order[0] == cfg_hi.id, "highest priority did not lead");
+  printf("[INFO] finish order=%d,%d,%d (aging allows low queue to complete)\n",
+         prio_finish_order[0], prio_finish_order[1], prio_finish_order[2]);
+  printf("[PASS] mixed priority tasks finished\n");
 }
 
 void test_synchronization(void) {
@@ -396,6 +504,9 @@ void run_proc_tests(void *arg) {
   printf("[SUITE] running kernel process tests\n");
   test_process_creation();
   test_scheduler();
+  test_scheduler_priority_gap();
+  test_scheduler_same_priority();
+  test_scheduler_mixed_priority();
   test_synchronization();
   debug_proc_table();
   printf("[SUITE] all tests finished\n");

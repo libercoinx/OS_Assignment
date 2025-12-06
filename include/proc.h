@@ -14,6 +14,8 @@ enum procstate {
   ZOMBIE
 };
 
+#define MLFQ_LEVELS 5
+
 struct context {
   uint64 ra;
   uint64 sp;
@@ -66,6 +68,7 @@ struct proc {
   int priority;          /* 0 is highest */
   int slice_ticks;       /* ticks used in current quantum */
   int timeslice_expired; /* set when quantum consumed */
+  int wait_ticks;        /* ticks spent waiting in queue */
   struct proc *runq_next;
   int runq_queued;
 };
@@ -84,8 +87,12 @@ struct cpu *mycpu(void);
 
 struct proc *alloc_process(void);
 int create_process(const char *name, void (*fn)(void *), void *arg);
+int create_process_prio(const char *name, void (*fn)(void *), void *arg, int priority);
 void exit_process(int status) __attribute__((noreturn));
 int wait_process(int *status);
+int set_priority(int pid, int prio);
+int get_priority(int pid);
+void ps(void);
 
 int sys_getpid(void);
 int sys_yield(void);
@@ -94,6 +101,8 @@ int sys_wait(int *status);
 int sys_exit(int status) __attribute__((noreturn));
 
 void scheduler_tick(void);
+
+extern const int mlfq_quanta[MLFQ_LEVELS];
 
 void push_off(void);
 void pop_off(void);

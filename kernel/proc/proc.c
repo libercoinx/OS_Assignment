@@ -2,9 +2,9 @@
 #include "defs.h"
 #include "kalloc.h"
 #include "panic.h"
-#include "string.h"
 #include "vm.h"
 #include "trap.h"
+#include "string.h"
 
 #define KSTACK_SIZE PGSIZE
 
@@ -13,8 +13,11 @@ static struct spinlock pid_lock;
 static struct spinlock wait_lock;
 struct cpu cpus[NCPU];
 
-#define MLFQ_LEVELS 3
-static const int mlfq_quanta[MLFQ_LEVELS] = {2, 4, 8};
+#ifndef MLFQ_LEVELS
+#define MLFQ_LEVELS 5
+#endif
+const int mlfq_quanta[MLFQ_LEVELS] = {2, 4, 8, 16, 32};
+static const int mlfq_aging_ticks = 10;
 
 struct runqueue {
   struct proc *head;
@@ -34,6 +37,8 @@ static void runq_push(struct proc *p);
 static struct proc* runq_pop(void);
 static void make_runnable(struct proc *p, int boost);
 static void reset_budget(struct proc *p);
+static int clamp_priority(int prio);
+static int initial_priority_for_name(const char *name);
 
 void
 procinit(void) {
@@ -52,6 +57,7 @@ procinit(void) {
     p->priority = 0;
     p->slice_ticks = 0;
     p->timeslice_expired = 0;
+    p->wait_ticks = 0;
     p->runq_next = 0;
     p->runq_queued = 0;
   }
@@ -61,19 +67,33 @@ static void
 reset_budget(struct proc *p) {
   p->slice_ticks = 0;
   p->timeslice_expired = 0;
+  p->wait_ticks = 0;
+}
+
+static int
+clamp_priority(int prio) {
+  if(prio < 0)
+    return 0;
+  if(prio >= MLFQ_LEVELS)
+    return MLFQ_LEVELS - 1;
+  return prio;
+}
+
+static int
+initial_priority_for_name(const char *name) {
+  if(name == 0)
+    return MLFQ_LEVELS / 2;
+  if(strncmp(name, "interactive", 11) == 0)
+    return 0;
+  if(strncmp(name, "cpu-task", 8) == 0)
+    return MLFQ_LEVELS / 2 + 1;
+  if(strncmp(name, "fs-worker", 9) == 0)
+    return MLFQ_LEVELS / 2;
+  return MLFQ_LEVELS / 2;
 }
 
 static void
-runq_push(struct proc *p) {
-  int level = p->priority;
-  if(level < 0)
-    level = 0;
-  if(level >= MLFQ_LEVELS)
-    level = MLFQ_LEVELS - 1;
-  acquire(&runq_lock);
-  if(p->runq_queued)
-    panic("runq_push");
-  p->priority = level;
+runq_push_locked(struct proc *p, int level) {
   struct runqueue *rq = &runq[level];
   p->runq_next = 0;
   if(rq->tail)
@@ -82,6 +102,16 @@ runq_push(struct proc *p) {
     rq->head = p;
   rq->tail = p;
   p->runq_queued = 1;
+}
+
+static void
+runq_push(struct proc *p) {
+  int level = clamp_priority(p->priority);
+  acquire(&runq_lock);
+  if(p->runq_queued)
+    panic("runq_push");
+  p->priority = level;
+  runq_push_locked(p, level);
   release(&runq_lock);
 }
 
@@ -103,6 +133,37 @@ runq_pop(void) {
   }
   release(&runq_lock);
   return p;
+}
+
+static void
+age_runqueues(void) {
+  acquire(&runq_lock);
+  for(int level = 1; level < MLFQ_LEVELS; level++) {
+    struct runqueue *rq = &runq[level];
+    struct proc *prev = 0;
+    struct proc *cur = rq->head;
+    while(cur) {
+      struct proc *next = cur->runq_next;
+      cur->wait_ticks++;
+      if(cur->wait_ticks >= mlfq_aging_ticks && level > 0) {
+        if(prev)
+          prev->runq_next = next;
+        else
+          rq->head = next;
+        if(cur == rq->tail)
+          rq->tail = prev;
+        cur->runq_next = 0;
+        cur->runq_queued = 0;
+        cur->priority = clamp_priority(level - 1);
+        reset_budget(cur);
+        runq_push_locked(cur, cur->priority);
+      } else {
+        prev = cur;
+      }
+      cur = next;
+    }
+  }
+  release(&runq_lock);
 }
 
 static void
@@ -192,6 +253,7 @@ freeproc(struct proc *p) {
   p->priority = 0;
   p->slice_ticks = 0;
   p->timeslice_expired = 0;
+  p->wait_ticks = 0;
   p->runq_next = 0;
   p->runq_queued = 0;
 }
@@ -260,7 +322,7 @@ proc_entry(void) {
 }
 
 int
-create_process(const char *name, void (*fn)(void *), void *arg) {
+create_process_prio(const char *name, void (*fn)(void *), void *arg, int priority) {
   struct proc *p = alloc_process();
   if(p == 0)
     return -1;
@@ -274,10 +336,17 @@ create_process(const char *name, void (*fn)(void *), void *arg) {
   p->kthread.start = fn;
   p->kthread.arg = arg;
   p->parent = myproc();
+  p->priority = clamp_priority(priority);
   p->state = RUNNABLE;
-  make_runnable(p, 1);
+  make_runnable(p, 0);
   release(&p->lock);
   return p->pid;
+}
+
+int
+create_process(const char *name, void (*fn)(void *), void *arg) {
+  int default_prio = initial_priority_for_name(name);
+  return create_process_prio(name, fn, arg, default_prio);
 }
 
 void
@@ -434,6 +503,68 @@ kill(int pid) {
   return -1;
 }
 
+int
+set_priority(int pid, int prio) {
+  prio = clamp_priority(prio);
+  for(int i = 0; i < NPROC; i++) {
+    struct proc *p = &proc[i];
+    acquire(&p->lock);
+    if(p->pid == pid && p->state != UNUSED && p->state != ZOMBIE) {
+      p->priority = prio;
+      p->timeslice_expired = 0;
+      p->slice_ticks = 0;
+      p->wait_ticks = 0;
+      if(p->state == RUNNABLE && p->runq_queued == 0)
+        runq_push(p);
+      release(&p->lock);
+      return 0;
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+int
+get_priority(int pid) {
+  for(int i = 0; i < NPROC; i++) {
+    struct proc *p = &proc[i];
+    acquire(&p->lock);
+    if(p->pid == pid && p->state != UNUSED) {
+      int prio = p->priority;
+      release(&p->lock);
+      return prio;
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+static const char*
+state_name(enum procstate st) {
+  switch(st) {
+    case UNUSED: return "UNUSED";
+    case USED: return "USED";
+    case SLEEPING: return "SLEEP";
+    case RUNNABLE: return "READY";
+    case RUNNING: return "RUN";
+    case ZOMBIE: return "ZOMBIE";
+  }
+  return "?";
+}
+
+void
+ps(void) {
+  printf("PID   PRIO  STATE     TICKS\n");
+  for(int i = 0; i < NPROC; i++) {
+    struct proc *p = &proc[i];
+    acquire(&p->lock);
+    if(p->state != UNUSED) {
+      printf("%d    %d     %s    %d\n", p->pid, p->priority, state_name(p->state), p->slice_ticks);
+    }
+    release(&p->lock);
+  }
+}
+
 void
 scheduler(void) {
   struct cpu *c = mycpu();
@@ -460,6 +591,7 @@ scheduler(void) {
 void
 scheduler_tick(void) {
   struct proc *p = myproc();
+  age_runqueues();
   if(p == 0)
     return;
   int need_yield = 0;

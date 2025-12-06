@@ -45,3 +45,22 @@ unsigned strlcpy(char *dst, const char *src, int n) {
     i++;
   return i;
 }
+
+int strncmp(const char *s, const char *t, unsigned n) {
+  while(n > 0 && *s && *s == *t) {
+    s++;
+    t++;
+    n--;
+  }
+  if(n == 0)
+    return 0;
+  return (unsigned char)*s - (unsigned char)*t;
+}
+
+int strcmp(const char *s, const char *t) {
+  while(*s && *s == *t) {
+    s++;
+    t++;
+  }
+  return (unsigned char)*s - (unsigned char)*t;
+}
