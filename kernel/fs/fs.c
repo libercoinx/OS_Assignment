@@ -638,6 +638,68 @@ void
 fs_force_recovery(void) {
   log_force_recover();
 }
+
+static int
+count_free_blocks(void) {
+  int free = 0;
+  for(uint b = 0; b < sb.nblocks; b += BPB) {
+    struct buf *bp = bread(0, BBLOCK(b, sb));
+    for(int bi = 0; bi < BPB && b + bi < sb.nblocks; bi++) {
+      int m = 1 << (bi % 8);
+      if((bp->data[bi/8] & m) == 0)
+        free++;
+    }
+    brelse(bp);
+  }
+  return free;
+}
+
+static int
+count_free_inodes(void) {
+  int free = 0;
+  for(uint inum = 1; inum < sb.ninodes; ) {
+    struct buf *bp = bread(0, IBLOCK(inum, sb));
+    struct dinode *dip = (struct dinode*)bp->data;
+    for(uint i = 0; i < IPB && inum < sb.ninodes; i++, inum++) {
+      if(dip[i].type == 0)
+        free++;
+    }
+    brelse(bp);
+  }
+  return free;
+}
+
+int
+fs_get_usage_stats(struct fs_usage_stats *stats) {
+  if(stats == 0)
+    return -1;
+  stats->total_blocks = sb.size;
+  stats->data_blocks = sb.nblocks;
+  stats->free_blocks = count_free_blocks();
+  stats->total_inodes = sb.ninodes;
+  stats->free_inodes = count_free_inodes();
+  return 0;
+}
+
+int
+fs_collect_inode_usage(struct fs_inode_usage *entries, int max_entries) {
+  if(entries == 0 || max_entries <= 0)
+    return 0;
+  acquire(&icache.lock);
+  int count = 0;
+  for(int i = 0; i < NINODE && count < max_entries; i++) {
+    struct inode *ip = &icache.inode[i];
+    if(ip->ref > 0) {
+      entries[count].inum = ip->inum;
+      entries[count].ref = ip->ref;
+      entries[count].type = ip->type;
+      entries[count].size = ip->size;
+      count++;
+    }
+  }
+  release(&icache.lock);
+  return count;
+}
 #ifndef MIN
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #endif

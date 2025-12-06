@@ -136,6 +136,32 @@ void fileclose(struct file *f);
 int fileread(struct file *f, char *addr, int n);
 int filewrite(struct file *f, char *addr, int n);
 
+struct fs_usage_stats {
+  uint total_blocks;
+  uint data_blocks;
+  uint free_blocks;
+  uint total_inodes;
+  uint free_inodes;
+};
+
+struct fs_cache_counters {
+  uint buffer_cache_hits;
+  uint buffer_cache_misses;
+  uint disk_read_count;
+  uint disk_write_count;
+};
+
+struct fs_inode_usage {
+  int inum;
+  int ref;
+  short type;
+  uint size;
+};
+
+int fs_get_usage_stats(struct fs_usage_stats *stats);
+void fs_get_cache_counters(struct fs_cache_counters *counters);
+int fs_collect_inode_usage(struct fs_inode_usage *entries, int max_entries);
+
 /* inode helpers */
 struct inode* namei(char *path);
 void ilock(struct inode *ip);

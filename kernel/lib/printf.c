@@ -42,16 +42,41 @@ int printf(const char *fmt, ...) {
     }
     fmt++;
     if (*fmt == 0) break;
+    int long_flag = 0;
+    while(*fmt == 'l') {
+      long_flag = 1;
+      fmt++;
+    }
     switch (*fmt) {
       case '%': console_putc('%'); cnt++; break;
       case 'd': {
-        int v = va_arg(ap, int);
-        print_number((long long)v, 10, 1); /* 带符号十进制 */
+        if(long_flag) {
+          long v = va_arg(ap, long);
+          print_number((long long)v, 10, 1);
+        } else {
+          int v = va_arg(ap, int);
+          print_number((long long)v, 10, 1); /* 带符号十进制 */
+        }
+        break;
+      }
+      case 'u': {
+        if(long_flag) {
+          unsigned long v = va_arg(ap, unsigned long);
+          print_number((long long)(unsigned long long)v, 10, 0);
+        } else {
+          unsigned v = va_arg(ap, unsigned);
+          print_number((long long)(unsigned long long)v, 10, 0);
+        }
         break;
       }
       case 'x': {
-        unsigned v = va_arg(ap, unsigned);
-        print_number((long long)(unsigned long long)v, 16, 0);
+        if(long_flag) {
+          unsigned long v = va_arg(ap, unsigned long);
+          print_number((long long)(unsigned long long)v, 16, 0);
+        } else {
+          unsigned v = va_arg(ap, unsigned);
+          print_number((long long)(unsigned long long)v, 16, 0);
+        }
         break;
       }
       case 'p': {
@@ -80,5 +105,4 @@ int printf(const char *fmt, ...) {
   va_end(ap);
   return cnt;
 }
-
 

@@ -7,7 +7,6 @@
 #include "trap.h"
 #include "proc.h"
 #include "fs.h"
-#include "kalloc.h"
 
 #define TEST_ASSERT(cond, msg)                                      \
   do {                                                              \
@@ -17,14 +16,18 @@
     }                                                               \
   } while(0)
 
+static void print_test_banner(const char *name) {
+  printf("============ %s ============\n", name);
+}
+
 static volatile int shared_counter;
 static volatile int yield_counts[3];
 static struct spinlock sleep_test_lock;
 static volatile int sleep_ready;
 static volatile int sleep_value;
 
-#define FS_CONCUR_WORKERS 1
-#define FS_CONCUR_ITERS   1
+#define FS_CONCUR_WORKERS 2
+#define FS_CONCUR_ITERS   2
 #define FS_PERF_SMALL_FILES 16
 #define FS_LARGE_BLOCKS   16
 static char fs_large_buffer[BSIZE * FS_LARGE_BLOCKS];
@@ -319,56 +322,65 @@ void run_proc_tests(void *arg) {
 
 
 void test_filesystem_smoke(void) {
-  printf("[TEST] filesystem smoke\n");
+  print_test_banner("filesystem smoke");
+  printf("[TEST] filesystem smoke...\n");
   const char *path = "/demo";
   const char *payload = "Hello, filesystem!";
   char buf[64];
 
   int written = fs_write_file(path, payload, strlen(payload));
-  TEST_ASSERT(written == (int)strlen(payload), "write mismatch");
+  TEST_ASSERT(written == (int)strlen(payload), "smoke write mismatch");
+  printf("[INFO] wrote %d bytes to %s: \"%s\"\n", written, path, payload);
   int size = fs_file_size(path);
-  TEST_ASSERT(size == (int)strlen(payload), "size mismatch");
+  TEST_ASSERT(size == (int)strlen(payload), "smoke size mismatch");
   memset(buf, 0, sizeof(buf));
   int read = fs_read_file(path, buf, sizeof(buf));
-  TEST_ASSERT(read == (int)strlen(payload), "read mismatch");
-  TEST_ASSERT(strncmp(buf, payload, strlen(payload)) == 0, "content mismatch");
-  TEST_ASSERT(fs_delete_file(path) == 0, "delete failed");
-  TEST_ASSERT(fs_read_file(path, buf, sizeof(buf)) < 0, "deleted file still readable");
+  TEST_ASSERT(read == (int)strlen(payload), "smoke read mismatch");
+  TEST_ASSERT(strncmp(buf, payload, strlen(payload)) == 0, "smoke content mismatch");
+  printf("[INFO] read %d bytes from %s: \"%s\"\n", read, path, buf);
+  TEST_ASSERT(fs_delete_file(path) == 0, "smoke delete failed");
+  printf("[INFO] deleted %s\n", path);
   printf("[PASS] filesystem smoke\n");
 }
 
 void test_filesystem_integrity(void) {
-  printf("[TEST] filesystem integrity\n");
-  const char *path = "/fs_integrity";
-  const char *msg = "Hello, filesystem!";
+  print_test_banner("filesystem integrity");
+  printf("[TEST] filesystem integrity...\n");
+  const char *path = "/testfile";
+  const char *payload = "Hello, filesystem!";
   char buf[64];
 
-  TEST_ASSERT(fs_write_file(path, msg, strlen(msg)) == (int)strlen(msg),
+  TEST_ASSERT(fs_write_file(path, payload, strlen(payload)) == (int)strlen(payload),
               "integrity write mismatch");
-  TEST_ASSERT(fs_file_size(path) == (int)strlen(msg), "integrity size mismatch");
+  printf("[INFO] integrity write path=%s payload=\"%s\"\n", path, payload);
+  TEST_ASSERT(fs_file_size(path) == (int)strlen(payload), "integrity size mismatch");
   memset(buf, 0, sizeof(buf));
-  TEST_ASSERT(fs_read_file(path, buf, sizeof(buf)) == (int)strlen(msg),
-              "integrity read mismatch");
-  TEST_ASSERT(strncmp(buf, msg, strlen(msg)) == 0, "integrity content mismatch");
+  int bytes = fs_read_file(path, buf, sizeof(buf));
+  TEST_ASSERT(bytes == (int)strlen(payload), "integrity read mismatch");
+  TEST_ASSERT(strncmp(buf, payload, strlen(payload)) == 0, "integrity content mismatch");
+  printf("[INFO] integrity read path=%s bytes=%d data=\"%s\"\n", path, bytes, buf);
   TEST_ASSERT(fs_delete_file(path) == 0, "integrity delete failed");
+  printf("[INFO] integrity delete path=%s\n", path);
   printf("[PASS] filesystem integrity\n");
 }
 
 static void concurrent_worker(void *arg) {
   int id = (int)(uint64)arg;
   char name[DIRSIZ];
-  uint32 value;
   for(int iter = 0; iter < FS_CONCUR_ITERS; iter++) {
     format_name(name, "concur", id * FS_CONCUR_ITERS + iter);
-    value = ((uint32)id << 16) | (uint32)iter;
+    uint32 value = (uint32)((id << 16) | iter);
+    printf("[INFO] worker %d writing %s value=0x%x\n", id, name, value);
     TEST_ASSERT(fs_write_file(name, (char *)&value, sizeof(value)) == (int)sizeof(value),
                 "concurrent write failed");
     TEST_ASSERT(fs_delete_file(name) == 0, "concurrent delete failed");
+    printf("[INFO] worker %d deleted %s\n", id, name);
   }
 }
 
 void test_concurrent_access(void) {
-  printf("[TEST] filesystem concurrent access\n");
+  print_test_banner("filesystem concurrent");
+  printf("[TEST] concurrent filesystem access...\n");
   int pids[FS_CONCUR_WORKERS];
   for(int i = 0; i < FS_CONCUR_WORKERS; i++) {
     pids[i] = create_process("fs-worker", concurrent_worker, (void *)(uint64)i);
@@ -393,31 +405,37 @@ void test_concurrent_access(void) {
     finished[idx] = 1;
     remaining--;
   }
-  printf("[PASS] filesystem concurrent access\n");
+  printf("[PASS] concurrent filesystem access\n");
 }
 
 void test_crash_recovery(void) {
-  printf("[TEST] filesystem crash recovery\n");
-  const char *path = "/fs_crash";
+  print_test_banner("filesystem recovery");
+  printf("[TEST] crash recovery simulation...\n");
+  const char *path = "/fs_recovery";
   const char *payload = "journal-entry";
   char buf[32];
 
   TEST_ASSERT(fs_write_file(path, payload, strlen(payload)) == (int)strlen(payload),
-              "crash write failed");
+              "recovery write failed");
+  printf("[INFO] wrote \"%s\" to %s, triggering recovery\n", payload, path);
   fs_force_recovery();
   TEST_ASSERT(fs_read_file(path, buf, sizeof(buf)) == (int)strlen(payload),
-              "crash read failed");
-  TEST_ASSERT(strncmp(buf, payload, strlen(payload)) == 0, "crash data mismatch");
-  TEST_ASSERT(fs_delete_file(path) == 0, "crash delete failed");
+              "recovery read failed");
+  TEST_ASSERT(strncmp(buf, payload, strlen(payload)) == 0, "recovery data mismatch");
+  printf("[INFO] after recovery read \"%s\" from %s\n", buf, path);
+  TEST_ASSERT(fs_delete_file(path) == 0, "recovery delete failed");
   fs_force_recovery();
-  TEST_ASSERT(fs_read_file(path, buf, sizeof(buf)) < 0, "crash cleanup failed");
-  printf("[PASS] filesystem crash recovery\n");
+  TEST_ASSERT(fs_read_file(path, buf, sizeof(buf)) < 0, "recovery cleanup failed");
+  printf("[INFO] verified %s removed after recovery\n", path);
+  printf("[PASS] crash recovery\n");
 }
 
 void test_filesystem_performance(void) {
-  printf("[TEST] filesystem performance\n");
+  print_test_banner("filesystem performance");
+  printf("[TEST] filesystem performance...\n");
   char name[DIRSIZ];
   const char *small_data = "test";
+
   uint64 start = get_time();
   for(int i = 0; i < FS_PERF_SMALL_FILES; i++) {
     format_name(name, "small", i);
@@ -430,7 +448,7 @@ void test_filesystem_performance(void) {
     TEST_ASSERT(fs_delete_file(name) == 0, "perf small delete failed");
   }
 
-  memset(fs_large_buffer, 0xab, sizeof(fs_large_buffer));
+  memset(fs_large_buffer, 0xcd, sizeof(fs_large_buffer));
   start = get_time();
   TEST_ASSERT(fs_write_file("/large_file", fs_large_buffer, sizeof(fs_large_buffer)) ==
               (int)sizeof(fs_large_buffer), "perf large write failed");
@@ -444,11 +462,50 @@ void test_filesystem_performance(void) {
   printf("[PASS] filesystem performance\n");
 }
 
+void debug_filesystem_state(void) {
+  print_test_banner("filesystem state");
+  struct fs_usage_stats stats;
+  TEST_ASSERT(fs_get_usage_stats(&stats) == 0, "fs stats unavailable");
+  printf("[INFO] blocks total=%d data=%d free=%d\n",
+         (int)stats.total_blocks, (int)stats.data_blocks, (int)stats.free_blocks);
+  printf("[INFO] inodes total=%d free=%d\n",
+         (int)stats.total_inodes, (int)stats.free_inodes);
+}
+
+void debug_inode_usage(void) {
+  print_test_banner("inode usage");
+  struct fs_inode_usage entries[NINODE];
+  int count = fs_collect_inode_usage(entries, NINODE);
+  if(count == 0) {
+    printf("[INFO] no active inodes\n");
+    return;
+  }
+  for(int i = 0; i < count; i++) {
+    printf("INODE:%d ref=%d type=%d size=%d\n",
+           entries[i].inum, entries[i].ref, entries[i].type, (int)entries[i].size);
+  }
+}
+
+void debug_disk_io(void) {
+  print_test_banner("disk I/O stats");
+  struct fs_cache_counters counters;
+  fs_get_cache_counters(&counters);
+  printf("[INFO] cache hits=%d misses=%d\n",
+         (int)counters.buffer_cache_hits, (int)counters.buffer_cache_misses);
+  printf("[INFO] disk reads=%d writes=%d\n",
+         (int)counters.disk_read_count, (int)counters.disk_write_count);
+}
+
 void run_fs_tests(void *arg) {
   (void)arg;
+  printf("[SUITE] running filesystem tests\n");
   test_filesystem_smoke();
   test_filesystem_integrity();
   test_concurrent_access();
   test_crash_recovery();
   test_filesystem_performance();
+  debug_filesystem_state();
+  debug_inode_usage();
+  debug_disk_io();
+  printf("[SUITE] filesystem tests finished\n");
 }

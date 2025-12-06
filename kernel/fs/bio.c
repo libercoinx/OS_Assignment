@@ -9,6 +9,11 @@ struct {
   struct buf head;
 } bcache;
 
+static uint buffer_cache_hits;
+static uint buffer_cache_misses;
+static uint disk_read_count;
+static uint disk_write_count;
+
 static uchar ramdisk[FSSIZE][BSIZE];
 
 static void
@@ -20,6 +25,10 @@ static void
 ramdisk_rw(struct buf *b, int write) {
   if(b->blockno >= FSSIZE)
     panic("ramdisk out of bounds");
+  if(write)
+    disk_write_count++;
+  else
+    disk_read_count++;
   if(write) {
     memmove(ramdisk[b->blockno], b->data, BSIZE);
   } else {
@@ -53,6 +62,7 @@ bget(uint dev, uint blockno) {
 
   for(b = bcache.head.next; b != &bcache.head; b = b->next) {
     if(b->dev == dev && b->blockno == blockno) {
+      buffer_cache_hits++;
       b->refcnt++;
       release(&bcache.lock);
       acquire(&b->lock);
@@ -62,6 +72,7 @@ bget(uint dev, uint blockno) {
 
   for(b = bcache.head.prev; b != &bcache.head; b = b->prev) {
     if(b->refcnt == 0) {
+      buffer_cache_misses++;
       b->dev = dev;
       b->blockno = blockno;
       b->valid = 0;
@@ -125,5 +136,17 @@ void
 bunpin(struct buf *b) {
   acquire(&bcache.lock);
   b->refcnt--;
+  release(&bcache.lock);
+}
+
+void
+fs_get_cache_counters(struct fs_cache_counters *counters) {
+  if(counters == 0)
+    return;
+  acquire(&bcache.lock);
+  counters->buffer_cache_hits = buffer_cache_hits;
+  counters->buffer_cache_misses = buffer_cache_misses;
+  counters->disk_read_count = disk_read_count;
+  counters->disk_write_count = disk_write_count;
   release(&bcache.lock);
 }
