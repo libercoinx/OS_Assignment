@@ -390,7 +390,7 @@ void test_scheduler_priority_gap(void) {
   print_test_banner("scheduler priority T1");
   printf("[TEST] priority gap: high vs low...\n");
   reset_prio_results();
-  struct prio_task_cfg cfg_low  = { .id = 1, .work_iters = 80 };
+  struct prio_task_cfg cfg_low  = { .id = 1, .work_iters = 50 };
   struct prio_task_cfg cfg_high = { .id = 2, .work_iters = 50 };
   int pid_low  = create_process_prio("prio-low", prio_task, &cfg_low, PRIO_LOW);
   int pid_high = create_process_prio("prio-high", prio_task, &cfg_high, PRIO_HIGH);
