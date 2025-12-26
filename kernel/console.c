@@ -45,10 +45,25 @@ int consoleread(char *dst, int n) {
   while (i < n) {
     int ch = uart_getc();
     if (ch < 0)
+      continue;
+    char c = (char)ch;
+    if (c == '\b' || c == 0x7f) { /* backspace */
+      if (i > 0) {
+        i--;
+        uart_putc('\b');
+        uart_putc(' ');
+        uart_putc('\b');
+      }
+      continue;
+    }
+    if (c == '\r' || c == '\n') {
+      uart_putc('\n');
+      dst[i++] = '\n';
       break;
-    dst[i++] = (char)ch;
-    if (ch == '\n' || ch == '\r')
-      break;
+    }
+    /* echo normal characters */
+    uart_putc(c);
+    dst[i++] = c;
   }
   return i;
 }
@@ -59,5 +74,4 @@ int consolewrite(const char *src, int n) {
     uart_putc(src[i]);
   return i;
 }
-
 
